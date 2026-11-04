@@ -91,15 +91,23 @@ class CandidateProfile(BaseModel):
     university: str = ""
     cgpa: float | None = None
     cgpa_scale: float = 10.0
+    # Phase 18.3: India fresher form fields - 10th/12th schooling details
+    school_tenth_name: str = ""            # e.g. 'Delhi Public School, Hyderabad'
+    board_tenth: str = ""                  # e.g. 'CBSE'
+    school_twelfth_name: str = ""          # e.g. 'Narayana Junior College'
+    board_twelfth: str = ""                # e.g. 'Telangana State Board / CBSE'
     tenth_percentage: float | None = None
     twelfth_percentage: float | None = None
+    intermediate_qualification: str = ""   # e.g. 'MPC (Maths, Physics, Chemistry)'
     diploma_percentage: float | None = None
+    diploma_details: str = ""              # e.g. 'Diploma in CME, 2021-2024' ("" when none)
     active_backlogs: int = 0
     previous_backlogs: int = 0
     education_gap_months: int = 0
     # work
     candidate_type: str = "fresher"        # fresher | entry_level | experienced
     total_experience_years: float = 0.0
+    internship_experience: str = ""        # e.g. '2 internships (8 months total): ML at XYZ'
     work_authorization: str = ""           # e.g. 'Indian citizen; authorized to work in India'
     # skills come from the master resume; keep a short list here for quick answers
     skills: list[str] = Field(default_factory=list)

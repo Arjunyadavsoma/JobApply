@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Greenhouse Sandbox - Software Engineer, Early Career</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 680px; margin: 30px auto; padding: 0 16px; color: #222; }
+    label { display: block; font-weight: 600; margin-top: 16px; font-size: 14px; }
+    input, select, textarea { width: 100%; padding: 9px; margin-top: 5px; box-sizing: border-box;
+      border: 1px solid #cfd7e0; border-radius: 4px; }
+    button { margin-top: 22px; padding: 11px 22px; background: #17ace0; color: #fff; border: 0;
+      border-radius: 4px; cursor: pointer; font-weight: 600; }
+    .field-error { color: #c0392b; font-size: 13px; margin-top: 4px; display: none; }
+    .step { border: 1px solid #e1e6eb; border-radius: 8px; padding: 22px; }
+    #step2, #confirmation { display: none; }
+    #confirmation { text-align: center; padding: 60px 20px; }
+    #confirmation h2 { color: #0a7f24; }
+  </style>
+</head>
+<body>
+  <h1>Greenhouse Sandbox Board</h1>
+  <p>Software Engineer, Early Career - Sandbox Cloud Inc. (Hyderabad, India)</p>
+
+  <form id="application_form" class="step" novalidate>
+    <div id="step1">
+      <label for="first_name">First Name <span style="color:#c0392b">*</span></label>
+      <input id="first_name" name="first_name" type="text" required />
+      <div class="field-error" id="first_name_error">First name can't be blank</div>
+
+      <label for="last_name">Last Name <span style="color:#c0392b">*</span></label>
+      <input id="last_name" name="last_name" type="text" required />
+      <div class="field-error" id="last_name_error">Last name can't be blank</div>
+
+      <label for="email">Email <span style="color:#c0392b">*</span></label>
+      <input id="email" name="email" type="email" required />
+      <div class="field-error" id="email_error">Email can't be blank</div>
+
+      <label for="phone">Phone</label>
+      <input id="phone" name="phone" type="tel" />
+
+      <label for="resume">Resume / CV <span style="color:#c0392b">*</span></label>
+      <input id="resume" name="resume" type="file" accept=".pdf,.doc,.docx" required />
+      <div class="field-error" id="resume_error">Resume file is required</div>
+
+      <button type="button" id="gh_next">Next</button>
+    </div>
+
+    <div id="step2">
+      <label for="grad_year">What year will/did you graduate? <span style="color:#c0392b">*</span></label>
+      <select id="grad_year" name="grad_year" required>
+        <option value="">Select a year</option>
+        <option>2025</option><option>2026</option><option>2027</option><option>2028</option>
+      </select>
+      <div class="field-error" id="grad_year_error">Graduation year is required</div>
+
+      <fieldset>
+        <legend>Are you legally authorized to work in India?</legend>
+        <label><input type="radio" name="work_auth" value="yes" /> Yes</label>
+        <label><input type="radio" name="work_auth" value="no" /> No</label>
+      </fieldset>
+
+      <label for="why_greenhouse">Why do you want to work at Sandbox Cloud?</label>
+      <textarea id="why_greenhouse" name="why_greenhouse" rows="4" maxlength="600"></textarea>
+
+      <button type="button" id="gh_back">Back</button>
+      <button type="button" id="gh_submit">Submit Application</button>
+    </div>
+  </form>
+
+  <div id="confirmation">
+    <h2>Thanks for your application!</h2>
+    <p>Your application has been submitted. A confirmation was sent to your email.</p>
+  </div>
+
+  <script>
+    document.getElementById('gh_next').addEventListener('click', function () {
+      var ok = true;
+      ['first_name', 'last_name', 'email', 'resume'].forEach(function (id) {
+        var el = document.getElementById(id);
+        var err = document.getElementById(id + '_error');
+        var bad = !el.value || (el.type === 'email' && !el.value.includes('@'));
+        err.style.display = bad ? 'block' : 'none';
+        el.style.borderColor = bad ? '#c0392b' : '#cfd7e0';
+        if (bad) ok = false;
+      });
+      if (ok) {
+        document.getElementById('step1').style.display = 'none';
+        document.getElementById('step2').style.display = 'block';
+      }
+    });
+    document.getElementById('gh_back').addEventListener('click', function () {
+      document.getElementById('step2').style.display = 'none';
+      document.getElementById('step1').style.display = 'block';
+    });
+    document.getElementById('gh_submit').addEventListener('click', function () {
+      var ok = true;
+      var gy = document.getElementById('grad_year');
+      if (!gy.value) { document.getElementById('grad_year_error').style.display = 'block'; ok = false; }
+      if (!document.querySelector('input[name="work_auth"]:checked')) ok = false;
+      if (ok) {
+        document.getElementById('application_form').style.display = 'none';
+        document.getElementById('confirmation').style.display = 'block';
+      }
+    });
+  </script>
+</body>
+</html>

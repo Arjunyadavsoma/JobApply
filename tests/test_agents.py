@@ -41,11 +41,12 @@ def _patch_structured(monkeypatch, payload):
     return captured
 
 
-def test_registry_lists_eight_agents():
+def test_registry_lists_all_agents():
     reg = agents.registry()
     keys = {a["key"] for a in reg}
-    assert keys == {"job_research", "job_matching", "resume_tailoring", "cover_letter",
-                    "application_answer", "application_quality", "interview_prep", "follow_up"}
+    assert keys == {"job_research", "company_research", "job_matching", "resume_tailoring",
+                    "cover_letter", "application_answer", "application_quality",
+                    "form_understanding", "interview_prep", "follow_up"}
     for a in reg:
         assert a["prompt_version"], a["key"]
 
@@ -102,10 +103,17 @@ def test_dispatch_routes_to_existing_services(job, monkeypatch):
     fake_e = EligibilityResult(status="eligible", checks=[])
     monkeypatch.setattr(matcher, "score_one", lambda j, m, p: (fake_m, fake_e))
 
-    assert agents.run("interview_prep", job["id"]) == {"service": "interview_prep"}
+    # Phase 18: interview_prep routes to the richer interview_prep module
+    import jobagent.interview_prep as ip
+    monkeypatch.setattr(ip, "plan", lambda jid, force=False: {
+        "questions": [{"id": "q1", "category": "python", "question": "Q?"}]})
+    ip_out = agents.run("interview_prep", job["id"])
+    assert ip_out["plan"]["questions"][0]["id"] == "q1"
+    assert "progress" in ip_out
+
     assert agents.run("follow_up", job["id"]) == {"service": "follow_up"}
     assert agents.run("job_matching", job["id"])["score"] == 88
-    assert set(calls) == {"interview_prep", "follow_up"}
+    assert set(calls) == {"follow_up"}                       # follow_up still via ai_services
     after = db.get(job["id"])
     assert after["score"] == 88 and after["status"] == "scored"
 

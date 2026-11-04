@@ -44,10 +44,14 @@ EXTRACT_JS = r"""
     if (!t) t = el.getAttribute('aria-label') || '';
     if (!t) { const l = el.closest('label'); if (l) t = l.innerText; }
     if (!t) {
+      // Nearest PRECEDING label/legend/question text (HTML convention: the
+      // description sits above its control). Falls back through ancestors.
       let p = el.parentElement;
       for (let i = 0; i < 4 && p && !t; i++, p = p.parentElement) {
-        const l = p.querySelector('label, legend, [class*="label"], [class*="question"]');
-        if (l && !l.contains(el)) t = l.innerText;
+        const cands = [...p.querySelectorAll('label, legend, [class*="label"], [class*="question"]')]
+          .filter(x => x !== el && !x.contains(el) &&
+                       (x.compareDocumentPosition(el) & Node.DOCUMENT_POSITION_FOLLOWING));
+        if (cands.length) t = cands[cands.length - 1].innerText;
       }
     }
     return clean(t || el.placeholder || el.name);
@@ -85,6 +89,10 @@ EXTRACT_JS = r"""
   const required = el => el.required || el.getAttribute('aria-required') === 'true';
 
   const out = [], groups = {};
+  // Stale tags from a previous step/scan break locator uniqueness (hidden fields
+  // keep their old data-ja-id and collide with newly numbered ones) - clear all.
+  scope.querySelectorAll('[data-ja-id]').forEach(el => el.removeAttribute('data-ja-id'));
+  scope.querySelectorAll('[data-ja-opt]').forEach(el => el.removeAttribute('data-ja-opt'));
   let n = 0;
   for (const el of scope.querySelectorAll('input, textarea, select')) {
     const tag = el.tagName.toLowerCase();

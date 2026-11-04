@@ -41,10 +41,15 @@ def pdf_page() -> Iterator:
 @contextmanager
 def headless_page() -> Iterator:
     """Hidden browser page that identifies as regular Chrome (some job sites block "HeadlessChrome").
-    Images, fonts and media are skipped for speed."""
+    Images, fonts and media are skipped for speed. Falls back to the bundled
+    Chromium when the configured Chrome channel is not installed."""
     with sync_playwright() as p:
-        browser = p.chromium.launch(channel=cfg("browser.channel", "chrome"), headless=True,
-                                    args=["--disable-blink-features=AutomationControlled"])
+        args = ["--disable-blink-features=AutomationControlled"]
+        try:
+            browser = p.chromium.launch(channel=cfg("browser.channel", "chrome"),
+                                        headless=True, args=args)
+        except Exception:                                      # noqa: BLE001 - no Chrome installed
+            browser = p.chromium.launch(headless=True, args=args)
         ua = (f"Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
               f"Chrome/{browser.version} Safari/537.36")
         ctx = browser.new_context(user_agent=ua, locale="en-US")

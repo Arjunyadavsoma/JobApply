@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Lever Sandbox - Associate Software Engineer</title>
+  <style>
+    body { font-family: -apple-system, 'Segoe UI', sans-serif; max-width: 620px; margin: 30px auto; padding: 0 16px; }
+    label { display: block; font-weight: 500; margin-top: 14px; }
+    input, select, textarea { width: 100%; padding: 8px; margin-top: 4px; box-sizing: border-box;
+      border: 1px solid #d4d4d4; border-radius: 3px; }
+    button { margin-top: 20px; padding: 10px 20px; background: #2e6be6; color: #fff; border: 0;
+      border-radius: 3px; cursor: pointer; }
+    .template__container { border: 1px solid #eee; padding: 24px; border-radius: 8px; }
+    .error { color: #d33; font-size: 13px; display: none; }
+    #lv_done { display: none; text-align: center; padding: 50px 0; }
+  </style>
+</head>
+<body>
+  <h1>Lever Sandbox Jobs</h1>
+  <p>Associate Software Engineer - Sandbox Product Labs (Bengaluru / Remote India)</p>
+
+  <div class="template__container">
+    <form name="apply" novalidate>
+      <label for="lv_name">Full name</label>
+      <input id="lv_name" name="name" type="text" required />
+      <div class="error" id="lv_name_err">Please enter your full name</div>
+
+      <label for="lv_email">Email</label>
+      <input id="lv_email" name="email" type="email" required />
+      <div class="error" id="lv_email_err">Please enter a valid email</div>
+
+      <label for="lv_phone">Phone</label>
+      <input id="lv_phone" name="phone" type="tel" />
+
+      <label for="lv_location">Current city</label>
+      <input id="lv_location" name="location" type="text" placeholder="e.g. Bengaluru" />
+
+      <label for="lv_resume">Attach your resume (PDF)</label>
+      <input id="lv_resume" name="resume" type="file" accept=".pdf" />
+
+      <label for="lv_links">Links (GitHub / portfolio / LinkedIn)</label>
+      <input id="lv_links" name="links" type="url" placeholder="https://github.com/you" />
+
+      <label for="lv_why">Why are you interested in this role?</label>
+      <textarea id="lv_why" name="why" rows="4" maxlength="500"></textarea>
+
+      <label>How did you hear about this job?</label>
+      <select id="lv_source" name="source">
+        <option value="">Select an option</option>
+        <option>Company careers page</option>
+        <option>LinkedIn</option>
+        <option>Referral</option>
+        <option>Campus placement</option>
+        <option>Other</option>
+      </select>
+
+      <button type="submit" id="lv_submit">Submit application</button>
+    </form>
+  </div>
+
+  <div id="lv_done">
+    <h2>Application submitted</h2>
+    <p>Thank you for applying to Sandbox Product Labs. We have received your application
+       and will review it shortly.</p>
+  </div>
+
+  <script>
+    document.querySelector('form[name="apply"]').addEventListener('submit', function (e) {
+      e.preventDefault();
+      var ok = true;
+      var name = document.getElementById('lv_name');
+      var email = document.getElementById('lv_email');
+      document.getElementById('lv_name_err').style.display = name.value ? 'none' : 'block';
+      document.getElementById('lv_email_err').style.display =
+        (email.value && email.value.includes('@')) ? 'none' : 'block';
+      if (!name.value || !email.value.includes('@')) ok = false;
+      if (ok) {
+        this.style.display = 'none';
+        document.getElementById('lv_done').style.display = 'block';
+      }
+    });
+  </script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-"""Phase 17.9 — optional email monitoring for application outcomes.
+"""Phase 17.9 + 18.10 — optional email monitoring for application outcomes.
 
 Two transports, both opt-in and credential-safe:
   * Gmail OAuth (google-api-python-client) - read-only gmail.readonly scope,
@@ -7,11 +7,13 @@ Two transports, both opt-in and credential-safe:
   * IMAP (any provider, e.g. Gmail app password) - email.imap_host config.
 
 Pipeline: fetch recent messages -> classify (deterministic keyword rules first,
-Groq for the uncertain ones) -> match to existing applications by company +
-title + date -> store in email_messages. Low-confidence classifications are
-flagged for review. Nothing is ever SENT automatically (drafts only via the
-Follow-up Agent, which the user copies themselves).
+Groq for the uncertain ones) -> refine into Phase 18 subcategories (online test,
+technical/HR interview, background verification) -> extract entities (date,
+interview time, deadline, meeting link, recruiter) -> match to existing
+applications -> store in email_messages.
 
+Still read-only: nothing is ever SENT automatically; low-confidence
+classifications are flagged for review; recruiter replies wait for the human.
 Classification confidence < 0.6 => reviewed=0 (needs the user's eye).
 """
 from __future__ import annotations
@@ -31,7 +33,8 @@ CREDS_PATH = DATA_DIR / "gmail_credentials.json"
 RULES: list[tuple[str, tuple[str, ...], float]] = [
     ("confirmation", ("we have received your application", "thank you for applying",
                       "your application has been received", "application is complete",
-                      "we've received your application"), 0.95),
+                      "we've received your application", "application received",
+                      "application has been submitted"), 0.95),
     ("assessment", ("assessment", "online test", "coding challenge", "hackerrank",
                     "coderpad", "amcat", "cocubes"), 0.85),
     ("interview", ("interview", "technical round", "hr round", "video call invite",
@@ -44,6 +47,87 @@ RULES: list[tuple[str, tuple[str, ...], float]] = [
     ("recruiter", ("opportunity", "opening", "your profile", "are you interested",
                    "job matching your profile"), 0.6),
 ]
+
+# Phase 18 refinements: primary label -> finer-grained detection.
+REFINEMENTS: list[tuple[str, str, tuple[str, ...]]] = [
+    ("assessment", "online_test", ("online test", "hackerrank", "coderpad", "amcat",
+                                    "cocubes", "coding challenge", "aptitude test")),
+    ("interview", "technical_interview", ("technical round", "technical interview",
+                                           "coding round", "machine coding",
+                                           "system design round", "dsa round")),
+    ("interview", "hr_interview", ("hr round", "hr interview", "hr discussion",
+                                    "managerial round", "culture fit")),
+    ("", "background_verification", ("background verification", "bgv",
+                                      "document verification", "pre-joining formalities",
+                                      "onboarding documents")),
+]
+
+
+def refine(label: str, subject: str, body: str) -> str:
+    """Finer-grained Phase 18 category, or the primary label unchanged."""
+    text = f"{subject} {body}"[:3000].lower()
+    for primary, detail, markers in REFINEMENTS:
+        if primary and label != primary:
+            continue
+        if any(m in text for m in markers):
+            return detail
+    return label
+
+
+# ---------------------------------------------------------------- entity extraction
+
+_MONTHS = ("january|february|march|april|may|june|july|august|september|october|"
+           "november|december|jan|feb|mar|apr|jun|jul|aug|sep|sept|oct|nov|dec")
+_DATE_RE = re.compile(
+    rf"\b(\d{{1,2}})(?:st|nd|rd|th)?\s+(?:{_MONTHS})\b|"
+    rf"\b(?:{_MONTHS})\s+(\d{{1,2}})(?:st|nd|rd|th)?,?\s*(\d{{4}})?\b|"
+    r"\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)", re.I)
+_TIME_RE = re.compile(r"\b([01]?\d|2[0-3]):([0-5]\d)\s*(am|pm|ist)?\b", re.I)
+_DEADLINE_RE = re.compile(
+    r"(?:complete|submit|finish)[^.]{0,40}?(?:by|before|within)\s+"
+    r"((?:\d{1,2}\s+)?(?:" + _MONTHS + r")\s*\d{0,4}|\d{1,3}\s*(?:hours|days|hrs))", re.I)
+_LINK_RE = re.compile(r"https?://[\w.-]+/[\w./?=%&+-]*", re.I)
+_MEETING_HINT = re.compile(r"meet\.google|zoom\.us|teams\.microsoft|webex|calendly|"
+                           r"interview.*(link|join)|join.*(interview|meeting)", re.I)
+_RECRUITER_RE = re.compile(
+    r"(?:regards|thanks|thank you|sincerely)[,\s]+([A-Z][a-z]+(?:\s[A-Z][a-z]+)?)\s*"
+    r"(?=[^<>]*(?:talent|recruit|hr|people|hiring|acquisition))", re.I)
+_EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]+")
+_TITLE = (r"(?:senior |junior |associate |lead |graduate )?[a-z][a-z /+]{0,30}?"
+          r"(?:engineer|developer|analyst|scientist|intern|trainee|manager|consultant|designer)")
+_ROLE_RE = re.compile(
+    rf"(?:role|position|profile|opening)\s*(?:for|of|:)?\s*({_TITLE})"
+    rf"|({_TITLE})\s*(?:role|position|profile|opening)",
+    re.I)
+
+
+def extract_entities(subject: str, body: str, sender: str = "") -> dict[str, Any]:
+    """Deterministic entity extraction from one message. Missing things stay
+    empty — never guessed."""
+    text = f"{subject}\n{body}"[:5000]
+    sender_text = sender or ""
+
+    date = next((m.group(0) for m in _DATE_RE.finditer(text)), "")
+    time = next((m.group(0).strip() for m in _TIME_RE.finditer(text)
+                 if m.group(3) or _TIME_RE.search(text[:text.find(m.group(0)) + 20])), "")
+    deadline_m = _DEADLINE_RE.search(text)
+    links = _LINK_RE.findall(text)
+    meeting_link = next((l for l in links if _MEETING_HINT.search(text) or
+                          re.search(r"meet|zoom|teams|webex|calendly", l, re.I)), "")
+    recruiter_name = next((m.group(1) for m in _RECRUITER_RE.finditer(body)), "")
+    recruiter_email = next((e for e in _EMAIL_RE.findall(sender_text)), "")
+    role_m = _ROLE_RE.search(text)
+
+    return {
+        "date": date[:40],
+        "time": time[:20],
+        "deadline": (deadline_m.group(1) if deadline_m else "")[:60],
+        "meeting_link": meeting_link[:200],
+        "recruiter_name": recruiter_name.strip()[:60],
+        "recruiter_email": recruiter_email,
+        "role": ((role_m.group(1) or role_m.group(2) or "").strip() if role_m else "")[:80],
+        "company": "",                                  # filled by match_to_application
+    }
 
 
 def classify_deterministic(subject: str, body: str) -> tuple[str | None, float]:
@@ -124,22 +208,31 @@ def match_to_application(subject: str, body: str, sender: str) -> str | None:
 # ---------------------------------------------------------------- ingestion
 
 def process_messages(messages: list[dict]) -> dict[str, int]:
-    """messages: [{message_id, sender, subject, body, received_at}]. Classify, match, store."""
+    """messages: [{message_id, sender, subject, body, received_at}]. Classify,
+    refine, extract entities, match, store."""
     stats = {"new": 0, "duplicate": 0, "needs_review": 0}
     for m in messages:
         if not m.get("message_id"):
             continue
         label, conf = classify(m.get("subject", ""), m.get("body", ""))
+        detail = refine(label, m.get("subject", ""), m.get("body", ""))
+        entities = extract_entities(m.get("subject", ""), m.get("body", ""),
+                                    m.get("sender", ""))
         job_id = match_to_application(m.get("subject", ""), m.get("body", ""), m.get("sender", ""))
+        if job_id:
+            job = db.get(job_id)
+            if job:
+                entities["company"] = job["company"]
         inserted = db.upsert_email({
             "message_id": m["message_id"],
             "sender": m.get("sender", "")[:200],
             "subject": m.get("subject", "")[:300],
             "snippet": (m.get("body", "") or "")[:280],
             "received_at": m.get("received_at") or db.now(),
-            "classification": label,
+            "classification": detail,                     # refined label when available
             "confidence": conf,
             "matched_job_id": job_id,
+            "entities": entities,
         })
         if not inserted:
             stats["duplicate"] += 1
@@ -162,6 +255,9 @@ def process_messages(messages: list[dict]) -> dict[str, int]:
         elif label == "offer" and job_id:
             db.update(job_id, status="offer")
             db.add_notification("status", "Offer email detected",
+                                (m.get("subject", "") or "")[:200], job_id)
+        elif detail == "background_verification" and job_id:
+            db.add_notification("status", "Background verification started",
                                 (m.get("subject", "") or "")[:200], job_id)
     return stats
 

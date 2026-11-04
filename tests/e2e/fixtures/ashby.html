@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Ashby Sandbox - Machine Learning Engineer I</title>
+  <style>
+    body { font-family: 'Inter', system-ui, sans-serif; max-width: 640px; margin: 30px auto; padding: 0 16px; }
+    label { display: block; font-weight: 600; margin-top: 15px; font-size: 14px; }
+    input, select, textarea { width: 100%; padding: 10px; margin-top: 5px; box-sizing: border-box;
+      border: 1px solid #d1d5db; border-radius: 6px; }
+    button { margin-top: 20px; padding: 10px 24px; border: 0; border-radius: 6px; cursor: pointer;
+      font-weight: 600; }
+    .primary { background: #5b34d4; color: #fff; }
+    .secondary { background: #e5e7eb; color: #111; }
+    .ashby-field-error { color: #dc2626; font-size: 13px; display: none; }
+    .wizard { border: 1px solid #e5e7eb; border-radius: 10px; padding: 24px; }
+    .progress { font-size: 13px; color: #6b7280; margin-bottom: 14px; }
+    #ashby_step2, #ashby_step3, #ashby_done { display: none; }
+    #ashby_done { text-align: center; padding: 56px 0; }
+  </style>
+</head>
+<body>
+  <div data-ashby="application-form">
+    <h1>Ashby Sandbox Careers</h1>
+    <p>Machine Learning Engineer I - Sandbox AI (Hybrid, Hyderabad)</p>
+
+    <div class="wizard">
+      <div class="progress" id="ashby_progress">Step 1 of 3 - Your details</div>
+
+      <div id="ashby_step1">
+        <label for="as_full_name">Full legal name</label>
+        <input id="as_full_name" name="fullName" type="text" required />
+        <div class="ashby-field-error" id="as_name_err">Name is required</div>
+
+        <label for="as_email">Email address</label>
+        <input id="as_email" name="email" type="email" required />
+
+        <label for="as_phone">Phone number</label>
+        <input id="as_phone" name="phone" type="tel" placeholder="+91" />
+
+        <label for="as_resume">Upload resume</label>
+        <input id="as_resume" name="resume" type="file" accept=".pdf,.doc,.docx" />
+
+        <button type="button" class="primary" id="as_next1">Next</button>
+      </div>
+
+      <div id="ashby_step2">
+        <label for="as_experience">Total years of relevant experience</label>
+        <select id="as_experience" name="yearsOfExperience">
+          <option value="">Select experience</option>
+          <option value="0">0 - 1 years</option>
+          <option value="1">1 - 2 years</option>
+          <option value="2">2 - 4 years</option>
+        </select>
+
+        <label for="as_notice">Notice period</label>
+        <select id="as_notice" name="noticePeriod">
+          <option value="">Select notice period</option>
+          <option>Immediate</option>
+          <option>15 days</option>
+          <option>30 days</option>
+          <option>60 days</option>
+        </select>
+
+        <label for="as_expected">Expected annual compensation (in LPA)</label>
+        <input id="as_expected" name="expectedCompensation" type="number" min="0" />
+
+        <fieldset>
+          <legend>Are you willing to relocate for this role?</legend>
+          <label><input type="radio" name="relocate" value="yes" /> Yes, I am open to relocation</label>
+          <label><input type="radio" name="relocate" value="no" /> No, I prefer my current city</label>
+        </fieldset>
+
+        <button type="button" class="secondary" id="as_back1">Back</button>
+        <button type="button" class="primary" id="as_next2">Next</button>
+      </div>
+
+      <div id="ashby_step3">
+        <label for="as_college">College / University</label>
+        <input id="as_college" name="college" type="text" />
+
+        <label for="as_cgpa">Cumulative GPA (CGPA)</label>
+        <input id="as_cgpa" name="cgpa" type="number" step="0.01" min="0" max="10" />
+
+        <label for="as_grad_year">Expected graduation year</label>
+        <input id="as_grad_year" name="graduationYear" type="number" min="2024" max="2030" />
+
+        <label for="as_note">Anything else you'd like us to know?</label>
+        <textarea id="as_note" name="additionalNote" rows="3" maxlength="400"></textarea>
+
+        <button type="button" class="secondary" id="as_back2">Back</button>
+        <button type="button" class="primary" id="as_submit">Submit Application</button>
+      </div>
+
+      <div id="ashby_done">
+        <h2>Application received</h2>
+        <p>Thank you for your interest in Sandbox AI. Your application has been received
+           successfully. Check your email for confirmation.</p>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    function show(step) {
+      ['ashby_step1', 'ashby_step2', 'ashby_step3'].forEach(function (id, i) {
+        document.getElementById(id).style.display = (i === step) ? 'block' : 'none';
+      });
+      document.getElementById('ashby_progress').textContent =
+        'Step ' + (step + 1) + ' of 3';
+    }
+    document.getElementById('as_next1').addEventListener('click', function () {
+      var name = document.getElementById('as_full_name');
+      document.getElementById('as_name_err').style.display = name.value ? 'none' : 'block';
+      if (name.value) show(1);
+    });
+    document.getElementById('as_back1').addEventListener('click', function () { show(0); });
+    document.getElementById('as_next2').addEventListener('click', function () { show(2); });
+    document.getElementById('as_back2').addEventListener('click', function () { show(1); });
+    document.getElementById('as_submit').addEventListener('click', function () {
+      show(0);
+      document.querySelector('.wizard').style.display = 'none';
+      document.getElementById('ashby_done').style.display = 'block';
+    });
+  </script>
+</body>
+</html>

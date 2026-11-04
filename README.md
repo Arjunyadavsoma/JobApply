@@ -51,9 +51,33 @@ batches, internships, off-campus drives, MNC career pages — and international 
 - **Resume tailoring on demand** — reorders and rephrases your experience in the job's
   terminology, one-page PDF in your own layout, cover letter, never invents facts; added skills
   are always listed for review
-- **Form auto-fill** — reads every field including custom dropdowns, radio groups and uploads;
-  answers from your profile + resume; India-specific fields (10th/12th marks, CGPA, graduation
-  year, notice period, CTC, relocation); anything unanswerable or legal is outlined red for you
+- **Form auto-fill with confidence levels** (Phase 18) — every field is mapped deterministically
+  first (labels, ARIA, names, placeholders, nearby text): **high** confidence fills automatically
+  from your verified profile, **medium** fills but flags itself for your review, **low** goes to
+  the Form Understanding Agent (or asks you), and **sensitive** fields (Aadhaar/PAN, consents,
+  demographics, salary history) are never auto-filled. India-specific fields (10th/12th school
+  and %, intermediate, diploma, backlogs, batch, notice period, CTC, relocation) map to real
+  profile data — missing values stay empty for you, never invented. Option fields match numeric
+  ranges ("5-8 LPA" for your 6 LPA) and yes/no phrasings ("No active backlogs").
+- **Universal ATS automation** (Phase 18) — per-platform drivers for Greenhouse, Lever, Ashby,
+  Workday, SmartRecruiters (each verified end-to-end in a sandbox) plus iCIMS, Taleo, Darwinbox,
+  SAP SuccessFactors, Oracle Recruiting Cloud, Zoho Recruit, Eightfold, Phenom and custom
+  portals (best-effort, honestly labelled). Multi-step wizards, platform validation errors,
+  resume uploads and interruption recovery (one browser session per application, checkpoints
+  after every step, idempotent resume, duplicate-submission guard).
+- **Application readiness score** (Phase 18) — nine dimensions (eligibility, match, skills,
+  resume, keywords, answers, required fields, factual consistency, URL validity) with blocking
+  issues, warnings and improvements; `ready to submit` only when nothing blocks
+- **Company research** (Phase 18) — verified facts from the posting + the company's public
+  careers page, clearly separated from AI interpretation; nothing invented when nothing is found
+- **Preparation workflow + batch** (Phase 18) — one click runs the full 13-step preparation
+  (analysis → eligibility → match → resume → cover letter → answers → validation → company
+  research → readiness → preview); batches prepare many jobs under your controls (allowed/
+  excluded companies, locations, job types, size cap) — every submission still needs its own
+  approval
+- **Interview preparation** (Phase 18) — per-application question bank across 9 categories
+  (company, technical, Python, SQL, DSA, AI/ML, project, HR, behavioral) with explanations and
+  model answers grounded in your resume, mock sessions and per-question progress tracking
 - **Application CRM** — discovered → matched → ready → submitted → assessment → interview →
   offer, with a per-job timeline, notes, duplicate-application guard and deadline tracking
 - **Application queue with quality gates** — every opportunity walks new → analyzing →
@@ -65,12 +89,15 @@ batches, internships, off-campus drives, MNC career pages — and international 
   needs a config flag **and** per-job approval **and** every gate, stops on CAPTCHA/login/
   legal/sensitive questions, records confirmation evidence; a job is "submitted" only when
   the platform confirms it)
-- **Eight Groq agents** — Job Research (new), Matching, Resume Tailoring, Cover Letter,
-  Application Answers, Application Quality, Interview Prep, Follow-up — one orchestration
-  layer, versioned prompts, all external text framed as untrusted
-- **Optional email monitoring (read-only)** — Gmail OAuth or IMAP; classifies
-  confirmations/assessments/interviews/rejections/offers, matches them to your applications,
-  flags low-confidence mail for review. Nothing is ever auto-sent.
+- **Ten Groq agents** — Job Research, Company Research, Matching, Resume Tailoring, Cover
+  Letter, Application Answers, Application Quality, Form Understanding, Interview Prep,
+  Follow-up — one orchestration layer with a shared verified-facts context, versioned prompts,
+  full execution history, and all external text framed as untrusted
+- **Optional email monitoring (read-only)** — Gmail OAuth or IMAP; classifies confirmations /
+  online tests / technical & HR interviews / assessments / rejections / offers / background
+  verification, extracts dates, times, deadlines, meeting links and recruiter contacts, and
+  matches them to your applications. Low-confidence mail is flagged for review. Nothing is
+  ever auto-sent.
 - **Analytics** — applications per week, score distribution, eligibility breakdown, missing
   skills, source quality: all from your own data, nothing fabricated
 - **AI assistant** — interview prep, recruiter follow-up emails, skill-gap reports with learning
@@ -85,8 +112,8 @@ batches, internships, off-campus drives, MNC career pages — and international 
 | Page | What you do there |
 |---|---|
 | **Jobs** | Search with your settings; India quick views (Fresher, 2027 batch, Internships, Hyderabad, Remote, Deadlines); live log; results with salary/batch/deadline facts |
-| **Queue** | The Phase 17 application queue: match/quality/eligibility/deadline columns, limits header, Analyze / Shortlist / Prepare / Approve / Assisted / Auto-submit actions |
-| **Job details** (click a row) | Eligibility table, match dimensions and reasons, **Tailor resume**, **Auto-fill application**, pipeline status, notes, fraud warnings, timeline |
+| **Queue** | The application queue: match/quality/eligibility/readiness/deadline columns, limits header, batch selection + "Prepare selected", Analyze / Shortlist / Prepare / Approve / Assisted / Auto-submit actions |
+| **Job details** (click a row) | Eligibility table, match dimensions and reasons, **Tailor resume**, **Auto-fill application**, **Prepare & interview** tab (readiness score, company research, interview question bank + mock sessions), pipeline status, notes, fraud warnings, timeline |
 | **Applications** | CRM pipeline: ready → submitted → assessment → interview → offer, one-click transitions |
 | **Analytics** | Weekly applications, score and eligibility distributions, source quality, missing skills, upcoming deadlines |
 | **AI Assistant** | Interview prep / follow-up / skill gap / quality check per job + answer knowledge base editor |
@@ -175,10 +202,9 @@ suite, the TypeScript check, the dashboard build and the Docker build on every p
 
 ```bash
 pip install -r requirements.txt pytest
-GROQ_API_KEY=gsk_dummy python -m pytest tests/ -q                 # 136 offline tests, no network
-GROQ_API_KEY=gsk_dummy python -m pytest tests/e2e/ -m e2e -q      # 5 sandbox browser tests (local fixture)
-python -m pytest tests/e2e/test_live_adapters.py -m live -q       # 7 live public-API tests (read-only)
-python scripts/e2e_report.py                                      # regenerate PHASE_17_TEST_REPORT.md
+GROQ_API_KEY=gsk_dummy python -m pytest tests/ -q                 # 209 offline tests, no network
+GROQ_API_KEY=gsk_dummy python -m pytest tests/e2e/ -m e2e -q      # 26 sandbox browser tests (local fixtures)
+python -m pytest tests/e2e/test_live_adapters.py -m live --live -q # 7 live public-API tests (read-only, opt-in)
 ```
 
 Covers: enrichment parsing (LPA/batches/CGPA/deadlines/fraud), eligibility classification,
@@ -188,10 +214,17 @@ duplicate-application guard, upload validation), profile-aware prefit, source ad
 mocked HTTP — plus the Phase 17 suites: verification engine (10 checks / 6 states / quality
 score / SSRF + typo-squat guards), queue gates + limits + actions, execution modes
 (sensitive-field stops, confirmation evidence, no-submission-without-confirmation), ATS
-registry detection for 18 platforms, the 8-agent orchestration (untrusted framing, prompt
-versions), search profiles + new filters, email classification/matching (nothing ever sent),
-and the sandbox E2E form engine (real Chromium: extraction, all input types, file upload,
-multi-step, CAPTCHA detection, session checkpoints, authorized-mode refusal).
+registry detection for 18 platforms, the agent orchestration (untrusted framing, prompt
+versions, execution history), search profiles + new filters, email classification/matching
+(nothing ever sent) — and the Phase 18 suites: form-intelligence mapping with confidence
+levels and sensitive-field refusal, company research (verified vs interpretation, cache,
+no fake data), readiness scoring (9 dimensions, unknown-costs-points), the 13-step
+preparation workflow, batch gates + duplicate protection, interview prep with progress,
+email entity extraction, the new API surface, and sandbox E2E adapters for Greenhouse,
+Lever, Ashby, Workday and SmartRecruiters (detection, mapping, uploads, multi-step,
+validation errors, recovery, locks, approval gates, duplicate prevention — with real
+headless Chromium against local fixtures; no external site is touched and no real
+application is ever submitted).
 
 ## Project structure
 
@@ -202,12 +235,21 @@ jobagent/
                     naukri.py, instahyre.py, arbeitnow.py, remotive.py, himalayas.py, jobicy.py,
                     india_companies.py, external.py (evidence-based external-link registry)
   verify.py         Phase 17 job verification engine (10 checks -> 6 states + quality score)
-  queue.py          Phase 17 application queue (11 states, quality gates, limits)
-  execution.py      Phase 17 execution modes (discovery / assisted / authorized)
-  agents.py         Phase 17 Groq agent orchestration (8 agents, versioned prompts)
-  ats_registry.py   Phase 17 ATS platform detection + automation quirks
-  email_sync.py     Phase 17 optional read-only email monitoring
-  search_profiles.py Phase 17 India-first saved search profiles
+  queue.py          application queue (11 states, quality gates, limits)
+  execution.py      execution modes (discovery / assisted / authorized)
+  form_intel.py     Phase 18 form intelligence (canonical fields, confidence levels,
+                    sensitive-field refusal, AI fallback rules)
+  ats_flow.py       Phase 18 universal ATS adapters (13 platforms) + FlowDriver
+  ats_registry.py   ATS platform detection + automation quirks
+  recovery.py       Phase 18 session locks, checkpoints, idempotent resume
+  company_intel.py  Phase 18 company research (verified facts vs AI interpretation)
+  readiness.py      Phase 18 application readiness score (9 dimensions)
+  prep.py           Phase 18 13-step preparation workflow + application preview
+  batch.py          Phase 18 controlled batch preparation (gates + audit)
+  interview_prep.py Phase 18 question bank, model answers, mock sessions, progress
+  agents.py         Groq agent orchestration (10 agents, shared context, run history)
+  email_sync.py     optional read-only email monitoring (10 categories + entities)
+  search_profiles.py India-first saved search profiles
   enrich.py         deterministic India-first enrichment (salary/batch/CGPA/deadlines/fraud)
   eligibility.py    4-level eligibility engine (batch, CGPA, backlogs, experience)
   profile.py        structured candidate profile + form-facts bridge
@@ -222,12 +264,15 @@ jobagent/
   analytics.py      real-data analytics for the dashboard
   server.py         FastAPI backend + dashboard hosting
   tasks.py          cross-platform background tasks + optional auto-discovery
-  db.py             SQLite job tracker (migrations, events, notifications, answers, usage)
+  db.py             SQLite job tracker (migrations, events, notifications, answers, usage,
+                    sessions, submissions, company intel, agent runs, locks, batches)
   cli.py            command-line entry point
 web/                React 19 + TypeScript + Tailwind dashboard (built copy in web/dist)
-tests/              76 offline tests
+tests/              209 offline tests + 26 sandbox E2E tests (real Chromium, local fixtures)
 config.example.yaml all settings, documented
 IMPLEMENTATION_STATUS.md phase-by-phase progress + known limitations
+PHASE_18_REPORT.md  Phase 18 features, ATS compatibility matrix, limitations
+PHASE_18_TEST_REPORT.md Phase 18 test results
 ```
 
 Your personal files are never committed: `config.yaml`, `.env`, `profile/` (resume), `output/`

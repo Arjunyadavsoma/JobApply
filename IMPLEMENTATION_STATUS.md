@@ -3,8 +3,8 @@
 Live progress file for the JobApply platform transformation. Updated at the end of every
 implementation phase. Nothing is marked done that hasn't been tested.
 
-**Last updated:** 2026-11-05 (Phase 17) · branch `main` · test suite: **148 passed**
-(136 offline + 5 sandbox-E2E + 7 live-adapter; see PHASE_17_TEST_REPORT.md)
+**Last updated:** 2026-11-05 (Phase 18) · branch `main` · test suite: **235 passed**
+(209 offline + 26 sandbox-E2E; 7 live-adapter tests opt-in; see PHASE_18_TEST_REPORT.md)
 
 ---
 
@@ -217,7 +217,133 @@ and tables (apply_sessions, email_messages, task_history, submissions). No data 
 
 ---
 
+## Phase 18 — Universal ATS automation, application success & production reliability ✅
+
+Audit first: Phase 17 baseline re-verified (all tests green on checkout) before any
+change. Everything below builds on the Phase 17 modules — no rebuilds, no rewrites.
+
+**18.1 Universal ATS automation** (`ats_flow.py`): per-platform `ATSAdapter`s for
+Greenhouse, Lever, Ashby, Workday, SmartRecruiters, iCIMS, Taleo, Darwinbox, SAP
+SuccessFactors, Oracle Recruiting Cloud, Zoho Recruit, Eightfold, Phenom + generic
+fallback — layered over the Phase 17 registry, not replacing it. Each adapter knows its
+form markers (data-attribute > class > id specificity), advance/submit selectors,
+validation-error selectors and confirmation patterns. `FlowDriver` walks ANY supported
+application: wait → upload → map → fill → validate → checkpoint → advance → review
+pause / authorized submit. Submit is clicked ONLY with `submit=True` (mode-C gated) and
+`submitted` is only reported true when the PLATFORM's confirmation is detected.
+
+**18.2 Form intelligence** (`form_intel.py`): deterministic-first field mapping with
+confidence levels — high (label/aria match → auto-fill from the verified profile),
+medium (name/placeholder → fill + flag for review), low (unmapped → Form Understanding
+Agent or ask the user), sensitive (IDs, consents, demographics, salary history →
+NEVER auto-filled). Synonym registry covers the requested examples ("Given Name"/
+"Legal First Name" → first_name; "Current CTC"/"Present Salary" → current_ctc;
+"Passing Year" → graduation_year; work-authorization / relocation / experience
+phrasings) plus option matching (numeric ranges, yes/no phrasing, exact text).
+AI fallback classifies fields but can never upgrade its answer over the profile
+(confidence capped at medium; values still resolved from the profile only).
+
+**18.3 India-specific fields** (`models.py`/`profile.py`): 10th/12th school + board,
+intermediate qualification, diploma details, internship experience added to
+`CandidateProfile` and exposed through `facts_for_forms()` — fresher screening forms
+(backlogs, batch, education gap, notice period) map to real profile data or stay
+`needs_human`; nothing is invented.
+
+**18.4 Preparation workflow** (`prep.py`): the 13-step pipeline (JD analysis →
+eligibility → match → missing skills → resume selection → tailoring → cover letter →
+answers → factual validation → company research → readiness → checkpoint → approval
+request) with a complete application preview. LLM steps degrade honestly (marked
+skipped with the reason) when Groq is unavailable.
+
+**18.5 Agents** (`agents.py`): now 10 — Company Research and Form Understanding added;
+`shared_candidate_context()` gives every agent the same verified facts block (profile +
+resume + KB answers + company intel with verified/interpretation split); every run
+recorded in the `agent_runs` audit table (agent, job, prompt version, duration,
+ok/error, result summary) behind `GET /api/agents/history`.
+
+**18.6 Company intelligence** (`company_intel.py`): research from the posting + the
+company's public careers page (when fetchable). Facts tagged `facts_verified` vs
+`ai_interpretations`; tech stack only when documented; no careers page → nothing
+cited. Cached 7 days per company. Failed research stores NOTHING (no fake data).
+
+**18.7 Readiness score** (`readiness.py`): 9 dimensions (eligibility, match, skill
+coverage, formatting, keyword alignment, answer completeness, required fields, factual
+consistency, URL validity) → 0-100 with blocking issues / warnings / improvements and
+`submission_ready` / `ready_for_authorized_submission` verdicts. Unknown data costs
+points — never assumed perfect.
+
+**18.8 Batch workflow** (`batch.py`): controlled batch PREPARATION with per-job gates
+(allowed/excluded companies, allowed locations/job types, max batch size, plus every
+queue gate). Submissions stay per-job, per-approval — a batch can never mass-submit.
+Duplicate protection: already-submitted or in-flight jobs are skipped with a reason.
+`batch_runs` table + `GET /api/batch/history` audit.
+
+**18.9 Recovery engine** (`recovery.py`): per-job browser session locks (SQLite,
+stale-takeover after 1h) — never two sessions on one application; checkpoints after
+every flow step; `resume()` reopens and skips already-filled fields (idempotent);
+`AlreadySubmitted` guard refuses to touch submitted applications; failures recorded to
+`needs_manual` + notification + last-failure state.
+
+**18.10 Email intelligence** (`email_sync.py`): Phase 17 taxonomy extended with
+refinements (online_test, technical_interview, hr_interview, background_verification)
++ deterministic entity extraction (date, time, deadline, meeting link, recruiter
+name/email, role) stored on the message. Still strictly read-only.
+
+**18.11 Interview preparation** (`interview_prep.py`): role-specific plan across 9
+categories (company, technical, Python, SQL, DSA, AI/ML, project, HR, behavioral) with
+explanations + model answers grounded in the verified resume; mock sessions serve the
+least-attempted question and track per-question progress (`prep_progress` table).
+
+**18.12 Real ATS testing**: sandbox fixtures mimicking each priority platform's DOM
+(Greenhouse multi-step + .field-error, Lever single page, Ashby 3-step wizard, Workday
+data-automation-id, SmartRecruiters) + 20 E2E tests with real headless Chromium:
+form/field detection, mapping, uploads, multi-step, validation, recovery, approval
+gates, duplicate prevention, submit-refusal on sensitive fields. No external site is
+touched; no real application is submitted.
+
+**18.13 Production quality:** performance indexes on hot paths (queue listing, status,
+company, submissions, emails); `data-ja-id` collision fix across wizard steps (the
+Phase 17 engine re-tagged fields per scan — hidden step-1 fields collided with step-2
+ids and stalled fills 30s each); browser waits scalable via `JA_WAIT_SCALE` (tests run
+4.5x faster without changing production pacing); bundled-Chromium fallback when the
+configured Chrome channel is missing.
+
+New API surface: `GET /api/ats/matrix`, `GET /api/jobs/{id}/readiness`,
+`POST /api/jobs/{id}/prepare`, `GET /api/jobs/{id}/preview`, `GET /api/jobs/{id}/company-intel`,
+`POST /api/batch/prepare`, `GET /api/batch/history`, `GET|POST /api/jobs/{id}/interview-prep*`,
+`GET /api/agents/history`, `POST /api/jobs/{id}/apply/resume-session`.
+
+Dashboard: Queue page gained batch selection + "Prepare selected" + per-row readiness
+scores with blocking-issue counts; JobDrawer gained a "Prepare & interview" tab
+(readiness radar, company research with verified/interpretation split, interview prep
+bank + mock sessions). Web dist rebuilt (tsc + vite clean).
+
+---
+
 ## Definition of Done — status
+
+### Phase 18 Definition of Done
+
+| Requirement | Status |
+|---|---|
+| Supported ATS platforms have working adapters | ✅ 13 platform adapters + generic; 5 verified end-to-end in sandbox, 8 best-effort (declared as such) |
+| Forms are detected reliably | ✅ semantic extraction + on-page markers, tested on 5 fixtures |
+| Candidate information mapped accurately | ✅ form_intel registry + tests (spec examples pass verbatim) |
+| Missing values are not invented | ✅ needs_human on unknown; AI capped; tests assert it |
+| Resume uploads work | ✅ E2E on all 5 fixtures |
+| Multi-step forms work | ✅ E2E: Greenhouse 2-step, Ashby 3-step wizard, Workday automation-ids |
+| Application recovery works | ✅ locks + checkpoints + idempotent resume + stale takeover, all tested |
+| Groq agents operate with validated structured outputs | ✅ 10 agents, schema-validated, execution history recorded |
+| Application quality scoring is functional | ✅ 9 dimensions, blocking/warnings/improvements, tested |
+| Batch preparation works | ✅ controls + per-job gates + audit trail, tested |
+| Approval gates cannot be bypassed | ✅ mode-C preflight unchanged; submit refusal on sensitive fields E2E-tested |
+| Duplicate submission is prevented | ✅ queue gate + recovery guard + batch skip, all tested |
+| Email classification works against test fixtures | ✅ 10 categories + entity extraction tested offline |
+| Interview preparation is functional | ✅ 9 categories, model answers, mock sessions, progress tracking |
+| All critical tests pass | ✅ 235 passed (offline + sandbox E2E) |
+| Documentation matches the implementation | ✅ this file + PHASE_18_REPORT + TEST_REPORT + README updated |
+
+### Earlier phases
 
 | Requirement | Status |
 |---|---|
@@ -263,10 +389,10 @@ and tables (apply_sessions, email_messages, task_history, submissions). No data 
 
 ```bash
 pip install -r requirements.txt pytest
-GROQ_API_KEY=gsk_dummy python -m pytest tests/ -q      # 136 offline tests
-GROQ_API_KEY=gsk_dummy python -m pytest tests/e2e/ -m e2e -q   # 5 sandbox browser tests
-python -m pytest tests/e2e/test_live_adapters.py -m live -q    # 7 live API tests
+GROQ_API_KEY=gsk_dummy python -m pytest tests/ -q      # 209 offline tests
+GROQ_API_KEY=gsk_dummy python -m pytest tests/e2e/ -m e2e -q   # 26 sandbox browser tests
+python -m pytest tests/e2e/test_live_adapters.py -m live --live -q    # 7 live API tests
+GROQ_API_KEY=gsk_real_key python -m pytest scripts/test_groq_backend.py  # real Groq smoke
 cd web && npm ci && npx tsc -p . --noEmit && npm run build
 python -m jobagent init && python -m jobagent web      # dashboard at :8600
-python scripts/e2e_report.py                            # regenerates the test report
 ```

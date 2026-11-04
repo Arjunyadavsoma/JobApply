@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>SmartRecruiters Sandbox - Python Developer (Fresher)</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 620px; margin: 30px auto; padding: 0 16px; }
+    label { display: block; font-weight: 500; margin-top: 14px; }
+    input, select, textarea { width: 100%; padding: 9px; margin-top: 4px; box-sizing: border-box;
+      border: 1px solid #cbd5e1; border-radius: 4px; }
+    button { margin-top: 22px; padding: 11px 24px; background: #e7e7e7; color: #111; border: 0;
+      border-radius: 4px; cursor: pointer; font-weight: 600; }
+    .sr-application-form { border: 1px solid #e2e8f0; padding: 24px; border-radius: 8px; }
+    .error-message { color: #dc2626; font-size: 13px; display: none; }
+    #sr_done { display: none; text-align: center; padding: 56px 0; }
+  </style>
+</head>
+<body>
+  <h1>SmartRecruiters Sandbox</h1>
+  <p>Python Developer (Fresher) - Sandbox Technologies (Pune, India)</p>
+
+  <form class="sr-application-form" id="application_form" novalidate>
+    <label for="sr_first">First name</label>
+    <input id="sr_first" name="firstName" type="text" required />
+    <div class="error-message" id="sr_first_err">First name is required</div>
+
+    <label for="sr_last">Last name</label>
+    <input id="sr_last" name="lastName" type="text" required />
+
+    <label for="sr_email">Email address</label>
+    <input id="sr_email" name="email" type="email" required />
+
+    <label for="sr_phone">Phone number</label>
+    <input id="sr_phone" name="phoneNumber" type="tel" />
+
+    <label for="sr_location">Location (city)</label>
+    <input id="sr_location" name="location" type="text" placeholder="Pune" />
+
+    <label for="sr_resume">Resume</label>
+    <input id="sr_resume" name="resume" type="file" accept=".pdf,.doc,.docx" />
+
+    <label>Are you available to start immediately?</label>
+    <select id="sr_available" name="availability">
+      <option value="">Select availability</option>
+      <option>Yes, immediately</option>
+      <option>Within 1 month</option>
+      <option>After graduation (2027)</option>
+    </select>
+
+    <label for="sr_notice">Current notice period (if employed)</label>
+    <input id="sr_notice" name="noticePeriod" type="text" placeholder="e.g. Immediate joiner" />
+
+    <label for="sr_cover">Message to the hiring team (optional)</label>
+    <textarea id="sr_cover" name="message" rows="4" maxlength="600"></textarea>
+
+    <button type="button" id="sr_submit">Submit Application</button>
+  </form>
+
+  <div id="sr_done">
+    <h2>Thank you for your application!</h2>
+    <p>Your application has been received by Sandbox Technologies. We will be in touch
+       regarding next steps.</p>
+  </div>
+
+  <script>
+    document.getElementById('sr_submit').addEventListener('click', function () {
+      var first = document.getElementById('sr_first');
+      document.getElementById('sr_first_err').style.display = first.value ? 'none' : 'block';
+      if (first.value) {
+        document.getElementById('application_form').style.display = 'none';
+        document.getElementById('sr_done').style.display = 'block';
+      }
+    });
+  </script>
+</body>
+</html>

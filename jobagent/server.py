@@ -365,6 +365,167 @@ def ats_platforms() -> list[dict]:
     return ats_registry.known_platforms()
 
 
+@app.get("/api/ats/matrix")
+def ats_matrix() -> list[dict]:
+    """Phase 18: tested vs best-effort platform compatibility."""
+    from jobagent.ats_flow import compatibility_matrix
+    return compatibility_matrix()
+
+
+# ---------------------------------------------------------------- Phase 18: application execution
+
+@app.get("/api/jobs/{job_id}/readiness")
+def job_readiness(job_id: str) -> dict:
+    from jobagent import readiness
+    try:
+        return readiness.score(job_id)
+    except KeyError as e:
+        raise HTTPException(404, "job not found") from e
+
+
+@app.post("/api/jobs/{job_id}/prepare")
+def job_prepare(job_id: str) -> dict:
+    """Run the full 13-step preparation workflow (runs inline; LLM steps degrade)."""
+    from jobagent import prep
+    try:
+        return prep.prepare(job_id)
+    except KeyError as e:
+        raise HTTPException(404, "job not found") from e
+    except Exception as e:                                     # noqa: BLE001
+        raise HTTPException(502, f"preparation failed: {e}") from e
+
+
+@app.get("/api/jobs/{job_id}/preview")
+def job_preview(job_id: str) -> dict:
+    from jobagent import prep
+    try:
+        return prep.preview(job_id)
+    except KeyError as e:
+        raise HTTPException(404, "job not found") from e
+
+
+@app.get("/api/jobs/{job_id}/company-intel")
+def job_company_intel(job_id: str, refresh: bool = False) -> dict:
+    from jobagent import company_intel
+    try:
+        if refresh:
+            return company_intel.research(job_id, force=True)
+        cached = company_intel.get(job_id)
+        if cached:
+            return cached
+        return company_intel.research(job_id)
+    except KeyError as e:
+        raise HTTPException(404, "job not found") from e
+    except Exception as e:                                     # noqa: BLE001
+        raise HTTPException(502, f"company research failed: {e}") from e
+
+
+class BatchBody(BaseModel):
+    job_ids: list[str]
+    label: str = ""
+    allowed_companies: list[str] | None = None
+    excluded_companies: list[str] | None = None
+    allowed_locations: list[str] | None = None
+    allowed_job_types: list[str] | None = None
+    max_batch_size: int | None = None
+
+
+@app.post("/api/batch/prepare")
+def batch_prepare(body: BatchBody) -> dict:
+    from jobagent import batch
+    controls = {k: v for k, v in body.model_dump().items()
+                if k not in ("job_ids", "label") and v is not None}
+    try:
+        return batch.batch_prepare(body.job_ids, label=body.label, controls=controls or None)
+    except Exception as e:                                     # noqa: BLE001
+        raise HTTPException(502, f"batch prepare failed: {e}") from e
+
+
+@app.get("/api/batch/history")
+def batch_history(limit: int = 20) -> list[dict]:
+    from jobagent import batch
+    return batch.batch_history(limit=min(limit, 100))
+
+
+@app.get("/api/jobs/{job_id}/interview-prep")
+def interview_prep_plan(job_id: str) -> dict:
+    from jobagent import interview_prep as ip
+    try:
+        plan = db.get_interview_prep(job_id) or ip.plan(job_id)
+        return {"plan": plan, "progress": ip.progress(job_id)}
+    except KeyError as e:
+        raise HTTPException(404, "job not found") from e
+    except Exception as e:                                     # noqa: BLE001
+        raise HTTPException(502, f"interview prep failed: {e}") from e
+
+
+class MockBody(BaseModel):
+    category: str = ""
+
+
+@app.post("/api/jobs/{job_id}/interview-prep/mock")
+def interview_prep_mock(job_id: str, body: MockBody | None = None) -> dict:
+    """Next mock question (optional category filter in the body)."""
+    from jobagent import interview_prep as ip
+    category = (body.category or "") if body else ""
+    q = ip.mock_question(job_id, category=category)
+    if not q:
+        raise HTTPException(404, "no prep plan yet - generate one first")
+    return q
+
+
+class MockAnswerBody(BaseModel):
+    question_id: str
+    answered: bool = True
+
+
+@app.post("/api/jobs/{job_id}/interview-prep/answer")
+def interview_prep_answer(job_id: str, body: MockAnswerBody) -> dict:
+    from jobagent import interview_prep as ip
+    try:
+        return ip.mock_answer(job_id, body.question_id, answered=body.answered)
+    except KeyError as e:
+        raise HTTPException(404, "question not found") from e
+
+
+@app.get("/api/agents/history")
+def agent_history(limit: int = 100, agent: str = "", job_id: str = "") -> list[dict]:
+    from jobagent import agents
+    return agents.history(limit=min(limit, 500), agent=agent, job_id=job_id)
+
+
+@app.post("/api/jobs/{job_id}/apply/resume-session")
+def resume_apply_session(job_id: str) -> dict:
+    """Recovery: reopen an interrupted application (returns the report; the
+    assisted worker picks it up from there)."""
+    from jobagent import recovery
+    try:
+        recovery.acquire(job_id, owner=f"api-{db.now()}")
+    except recovery.LockHeld as e:
+        raise HTTPException(409, f"another session is running: {e.owner}") from e
+    if db.submissions_for(job_id):
+        recovery.release(job_id)
+        raise HTTPException(409, "this application was already submitted - "
+                                 "duplicate submissions are blocked")
+    try:
+        from jobagent.browser import headless_page
+        from jobagent import ats_flow
+        with headless_page() as page:
+            job = db.get(job_id)
+            url = job["apply_url"] or job["url"]
+            page.goto(url, wait_until="domcontentloaded", timeout=60000)
+            report = recovery.resume(job_id, page)
+            adapter, info = ats_flow.detect_adapter(page.url, page)
+            report["ats"] = info.get("platform", "generic")
+    except recovery.AlreadySubmitted:
+        raise HTTPException(409, "already submitted")
+    except Exception as e:                                     # noqa: BLE001
+        recovery.release(job_id)
+        raise HTTPException(502, f"recovery failed: {e}") from e
+    recovery.release(job_id)
+    return report
+
+
 # ---------------------------------------------------------------- Phase 17: email monitoring
 
 @app.get("/api/emails")

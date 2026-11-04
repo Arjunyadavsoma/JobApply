@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Workday Sandbox - Graduate Engineer Trainee</title>
+  <style>
+    body { font-family: 'Roboto', system-ui, sans-serif; max-width: 700px; margin: 30px auto; padding: 0 16px; }
+    label { display: block; font-weight: 500; margin-top: 15px; }
+    input, select, textarea { width: 100%; padding: 9px; margin-top: 5px; box-sizing: border-box;
+      border: 1px solid #bcc3ca; border-radius: 2px; }
+    button { margin-top: 20px; padding: 10px 26px; border: 1px solid #0e2c40; background: #fff;
+      border-radius: 2px; cursor: pointer; }
+    .primary { background: #0e2c40; color: #fff; }
+    [data-automation-id="validationError"] { color: #b3001b; font-size: 13px; display: none; }
+    .wdstep { border: 1px solid #dde1e6; padding: 22px; border-radius: 4px; }
+    #wd_step2, #wd_done { display: none; }
+    #wd_done { text-align: center; padding: 56px 0; }
+  </style>
+</head>
+<body>
+  <h1>Workday Sandbox Careers</h1>
+  <p>Graduate Engineer Trainee - Sandbox Global Services (India)</p>
+
+  <div class="wdstep">
+    <div id="wd_step1">
+      <label for="wd_first">First Name</label>
+      <input id="wd_first" data-automation-id="legalNameSection-firstNameInput" type="text" required />
+      <div data-automation-id="validationError" id="wd_first_err">Enter a first name</div>
+
+      <label for="wd_last">Last Name</label>
+      <input id="wd_last" data-automation-id="legalNameSection-lastNameInput" type="text" required />
+
+      <label for="wd_city">City</label>
+      <input id="wd_city" data-automation-id="contactSection-cityInput" type="text" />
+
+      <label for="wd_country">Country/Region</label>
+      <select id="wd_country" data-automation-id="countryRegion-select">
+        <option value="">Select a country/region</option>
+        <option>India</option><option>United States</option><option>United Kingdom</option>
+      </select>
+
+      <label for="wd_resume">Resume (optional but recommended)</label>
+      <input id="wd_resume" data-automation-id="resume-upload" type="file" accept=".pdf" />
+
+      <button type="button" data-automation-id="bottom-navigation-next-button"
+              id="wd_next">Next</button>
+    </div>
+
+    <div id="wd_step2">
+      <label for="wd_education">Education Level</label>
+      <select id="wd_education" data-automation-id="educationLevel-select">
+        <option value="">Select an education level</option>
+        <option>Bachelor's Degree</option>
+        <option>Master's Degree</option>
+        <option>Diploma</option>
+      </select>
+
+      <label for="wd_discipline">Field of Study / Discipline</label>
+      <input id="wd_discipline" data-automation-id="discipline-input" type="text" />
+
+      <label for="wd_grad_year">Graduation Year</label>
+      <input id="wd_grad_year" data-automation-id="graduationYear-input" type="number" />
+
+      <fieldset>
+        <legend>Do you have any active backlogs?</legend>
+        <label><input type="radio" name="backlogs" value="yes" /> Yes, I have active backlogs</label>
+        <label><input type="radio" name="backlogs" value="no" /> No active backlogs</label>
+      </fieldset>
+
+      <button type="button" data-automation-id="bottom-navigation-back-button"
+              onclick="document.getElementById('wd_step2').style.display='none';
+                       document.getElementById('wd_step1').style.display='block';">Back</button>
+      <button type="button" class="primary" data-automation-id="bottom-navigation-submit-button"
+              id="wd_submit">Submit</button>
+    </div>
+
+    <div id="wd_done">
+      <h2>Your application has been submitted</h2>
+      <p>Thank you for your interest in Sandbox Global Services. We have received your
+         application and sent a confirmation to your email.</p>
+    </div>
+  </div>
+
+  <script>
+    document.getElementById('wd_next').addEventListener('click', function () {
+      var first = document.getElementById('wd_first');
+      document.getElementById('wd_first_err').style.display = first.value ? 'none' : 'block';
+      if (first.value) {
+        document.getElementById('wd_step1').style.display = 'none';
+        document.getElementById('wd_step2').style.display = 'block';
+      }
+    });
+    document.getElementById('wd_submit').addEventListener('click', function () {
+      document.querySelector('.wdstep').style.display = 'none';
+      document.getElementById('wd_done').style.display = 'block';
+    });
+  </script>
+</body>
+</html>

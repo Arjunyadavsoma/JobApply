@@ -9,8 +9,28 @@ files to be added through the web editor or a token with `workflow` scope, so:
 2. Name the file `.github/workflows/ci.yml`
 3. Paste the contents of `docs/ci-workflow.yml` and commit.
 
-From then on, every push runs the offline test suite (76 tests), the TypeScript check,
+From then on, every push runs the offline test suite (209 tests), the TypeScript check,
 the dashboard build and the Docker image build.
+
+## Phase 18 deployment notes
+
+- **New API endpoints** (all under the same optional `X-Dashboard-Token` auth):
+  `/api/ats/matrix`, `/api/jobs/{id}/readiness|prepare|preview|company-intel`,
+  `/api/batch/prepare`, `/api/batch/history`, `/api/jobs/{id}/interview-prep*`,
+  `/api/agents/history`, `/api/jobs/{id}/apply/resume-session`.
+- **Database migrations are automatic and idempotent** — first start after upgrading adds the
+  Phase 18 tables (`company_intel`, `agent_runs`, `interview_prep`, `prep_progress`,
+  `apply_locks`, `batch_runs`), the `email_messages.entities` column and the performance
+  indexes. No data is dropped; keep the `data/` volume mounted.
+- **One browser session per application** is enforced by SQLite locks — safe to run multiple
+  assisted sessions for DIFFERENT jobs, never for the same job.
+- **`JA_WAIT_SCALE`** (default `1`) scales the browser pacing; only set it below `1` for
+  test environments, never in production.
+- **Batch controls** live under `batch:` in `config.yaml` (size cap, allowed/excluded
+  companies, allowed locations/job types). Batches only PREPARE; submissions remain
+  per-job approvals behind `automation.authorized_submission`.
+- **Chromium fallback**: if the configured Chrome channel is missing in the container, the
+  headless apply flows fall back to the bundled Chromium automatically.
 
 ## Docker
 
@@ -47,3 +67,5 @@ docker compose up -d --build     # dashboard at http://localhost:8600
 | `AI_PROVIDER` | documentation marker; effective backend is `config.yaml llm.backend` |
 | `ANTHROPIC_API_KEY` | only for `llm.backend: api` |
 | `DASHBOARD_TOKEN` | optional: require `X-Dashboard-Token` on `/api/*` |
+| `JA_WAIT_SCALE` | browser pacing multiplier (tests use 0.15; keep 1 in production) |
+| `EMAIL_IMAP_PASSWORD` | IMAP email sync (read-only) |

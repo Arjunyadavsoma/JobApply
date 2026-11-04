@@ -257,7 +257,108 @@ export const api = {
   syncEmails: () => post<{ ok: boolean; new?: number; duplicate?: number; needs_review?: number }>("/api/emails/sync"),
   taskHistory: () => request<{ id: number; label: string; started_at: string; ended_at: string | null }[]>("/api/tasks"),
   backup: () => post<{ ok: boolean; path: string; bytes: number }>("/api/backup"),
+
+  // ---- Phase 18: application execution platform ----
+  atsMatrix: () =>
+    request<{ platform: string; name: string; tested: boolean; multi_step: boolean;
+              status: string; notes: string }[]>("/api/ats/matrix"),
+  readiness: (jobId: string) =>
+    request<ReadinessScore>(`/api/jobs/${jobId}/readiness`),
+  prepare: (jobId: string) =>
+    post<{ job_id: string; steps: PrepStep[]; readiness: ReadinessScore; ready: boolean;
+           preview: Record<string, unknown> }>(`/api/jobs/${jobId}/prepare`),
+  preview: (jobId: string) =>
+    request<{ job: Record<string, unknown>; resume_path: string | null;
+              cover_letter: string; saved_answers: { question: string; answer: string }[];
+              approval_required: boolean }>(`/api/jobs/${jobId}/preview`),
+  companyIntel: (jobId: string) =>
+    request<{ intel: CompanyIntel; sources: string[]; updated_at: string }>(`/api/jobs/${jobId}/company-intel`),
+  batchPrepare: (jobIds: string[], controls: BatchControls, label = "") =>
+    post<{ batch_id: number; prepared: number; skipped: number;
+           results: { job_id: string; company?: string; ok: boolean; skipped?: string;
+                      ready?: boolean; readiness?: number }[] }>("/api/batch/prepare",
+      { job_ids: jobIds, label, ...controls }),
+  batchHistory: () =>
+    request<{ id: number; label: string; created_at: string; finished_at: string | null;
+              result: { prepared?: number; skipped?: number } | null }[]>("/api/batch/history"),
+  interviewPrep: (jobId: string) =>
+    request<{ plan: InterviewPrepPlan; progress: { total_questions: number;
+              per_category: Record<string, number>; coverage: number } }>(`/api/jobs/${jobId}/interview-prep`),
+  mockQuestion: (jobId: string, category = "") =>
+    post<{ question: PrepQuestionUI; hint: string }>(`/api/jobs/${jobId}/interview-prep/mock`,
+      category ? { category } : undefined),
+  mockAnswer: (jobId: string, questionId: string, answered = true) =>
+    post<{ question: string; category: string; explanation: string; model_answer: string;
+           progress: { attempted: Record<string, { questions: number; attempted: number;
+                       answered: number }> } }>(`/api/jobs/${jobId}/interview-prep/answer`,
+      { question_id: questionId, answered }),
+  agentHistory: (limit = 50) =>
+    request<{ id: number; agent: string; job_id: string | null; ok: number; error: string | null;
+              duration_ms: number; created_at: string }[]>(`/api/agents/history?limit=${limit}`),
+  resumeSession: (jobId: string) =>
+    post<{ resumed: boolean; step: number; ats: string; next_action: string }>(`/api/jobs/${jobId}/apply/resume-session`),
 };
+
+// ---- Phase 18 types ----
+
+export interface ReadinessScore {
+  job_id: string;
+  overall: number;
+  dimensions: Record<string, number>;
+  blocking_issues: string[];
+  warnings: string[];
+  improvements: string[];
+  submission_ready: boolean;
+  ready_for_authorized_submission: boolean;
+}
+
+export interface PrepStep {
+  step: string;
+  ran: boolean;
+  detail: string;
+  data?: unknown;
+}
+
+export interface CompanyIntel {
+  company: string;
+  overview: string;
+  products: string[];
+  tech_stack: string[];
+  role_responsibilities: string[];
+  required_qualifications: string[];
+  locations: string[];
+  career_page_url: string;
+  recruitment_process: string;
+  facts_verified: string[];
+  ai_interpretations: string[];
+  generated_at: string;
+}
+
+export interface BatchControls {
+  allowed_companies?: string[];
+  excluded_companies?: string[];
+  allowed_locations?: string[];
+  allowed_job_types?: string[];
+  max_batch_size?: number;
+}
+
+export interface PrepQuestionUI {
+  id: string;
+  category: string;
+  question: string;
+  explanation?: string;
+  model_answer?: string;
+  difficulty?: string;
+}
+
+export interface InterviewPrepPlan {
+  company: string;
+  role: string;
+  focus_areas: string[];
+  questions: PrepQuestionUI[];
+  talking_points: string[];
+  generated_at: string;
+}
 
 export interface QueueRow {
   job_id: string;

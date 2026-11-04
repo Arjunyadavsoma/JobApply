@@ -147,6 +147,14 @@ automation:
   min_salary_lpa: 6              # CTC floor from your profile
   preferred_locations: [Hyderabad, Bengaluru, Chennai, Pune, Mumbai, Gurugram, Noida, Remote]
 
+# Phase 18: controlled batch PREPARATION (submission stays per-job, per-approval).
+batch:
+  max_size: 10                   # jobs per batch run (hard cap)
+  allowed_companies: []          # empty = all; e.g. [Google, Microsoft]
+  excluded_companies: []         # e.g. [Staffing Agency X]
+  allowed_locations: []          # empty = all; e.g. [Hyderabad, Remote]
+  allowed_job_types: []          # empty = all; e.g. [full_time, internship]
+
 # Phase 17: optional email monitoring (READ-ONLY; nothing is ever auto-sent).
 # Gmail: run scripts in README (OAuth, gmail.readonly scope) - token lands in data/gmail_token.json.
 # IMAP: set imap_host/imap_user + EMAIL_IMAP_PASSWORD env var (works with Gmail app passwords).

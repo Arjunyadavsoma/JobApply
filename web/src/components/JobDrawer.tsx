@@ -1,12 +1,13 @@
 import { useEffect, useState } from "react";
 import {
-  Check, CircleAlert, Download, ExternalLink, FileText, FolderOpen, History, Mail, MapPin,
+  Check, CircleAlert, Download, ExternalLink, FileText, FolderOpen, GraduationCap, History, Mail, MapPin,
   MousePointerClick, ShieldCheck, Sparkles, Undo2, WandSparkles, X,
 } from "lucide-react";
 import { api, ELIGIBILITY_META, salaryLabel, STATUS_META, type JobDetail, type Status, type Task } from "../api";
 import { Button, ScoreBadge, useAction } from "./ui";
+import { PrepPanel } from "./PrepPanel";
 
-type Tab = "match" | "resume" | "cover" | "jd" | "activity";
+type Tab = "match" | "resume" | "cover" | "prep" | "jd" | "activity";
 
 export function JobDrawer({ jobId, task, version, onClose, onChanged }: {
   jobId: string; task: Task | null; version: number; onClose: () => void; onChanged: () => void;
@@ -34,6 +35,7 @@ export function JobDrawer({ jobId, task, version, onClose, onChanged }: {
     { id: "match", label: "Why it matches", icon: <Sparkles className="size-4" /> },
     { id: "resume", label: "Tailored resume", icon: <FileText className="size-4" /> },
     { id: "cover", label: "Cover letter", icon: <Mail className="size-4" /> },
+    { id: "prep", label: "Prepare & interview", icon: <GraduationCap className="size-4" /> },
     { id: "jd", label: "Job description", icon: <FileText className="size-4" /> },
     { id: "activity", label: "Activity", icon: <History className="size-4" /> },
   ];
@@ -337,6 +339,8 @@ export function JobDrawer({ jobId, task, version, onClose, onChanged }: {
                   </div>
                 ) : <p className="text-sm text-slate-500">Written when you press <b>Tailor resume</b>.</p>
               )}
+
+              {tab === "prep" && <PrepPanel jobId={job.id} />}
 
               {tab === "jd" && (
                 <div className="whitespace-pre-wrap text-sm leading-relaxed text-slate-700">{job.description}</div>

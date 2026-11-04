@@ -181,6 +181,79 @@ CREATE TABLE IF NOT EXISTS submissions (
     submitted_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_submissions_job ON submissions(job_id);
+
+-- ---- Phase 18: application execution platform ----
+
+CREATE TABLE IF NOT EXISTS company_intel (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    company     TEXT NOT NULL,               -- lower-cased company name (dedup key)
+    intel_json  TEXT NOT NULL,               -- CompanyIntel model: verified facts + AI interpretation
+    sources     TEXT,                        -- JSON list of source URLs actually fetched
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_company_intel ON company_intel(company);
+
+CREATE TABLE IF NOT EXISTS agent_runs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    agent       TEXT NOT NULL,               -- agent key, e.g. company_research
+    job_id      TEXT,
+    prompt_version TEXT NOT NULL,
+    model       TEXT,
+    duration_ms INTEGER,
+    cached      INTEGER NOT NULL DEFAULT 0,
+    ok          INTEGER NOT NULL DEFAULT 1,
+    error       TEXT,
+    result_summary TEXT,                     -- first ~300 chars of the structured result
+    created_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_agent ON agent_runs(agent, created_at);
+CREATE INDEX IF NOT EXISTS idx_agent_runs_job ON agent_runs(job_id);
+
+CREATE TABLE IF NOT EXISTS interview_prep (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id      TEXT NOT NULL,
+    plan_json   TEXT NOT NULL,               -- InterviewPrepPlan model
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_interview_prep_job ON interview_prep(job_id);
+
+CREATE TABLE IF NOT EXISTS prep_progress (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id      TEXT NOT NULL,
+    category    TEXT NOT NULL,               -- company|technical|python|sql|dsa|ai_ml|project|hr|behavioral
+    question_id TEXT NOT NULL,
+    attempted   INTEGER NOT NULL DEFAULT 0,  -- times shown in a mock session
+    answered    INTEGER NOT NULL DEFAULT 0,  -- times the candidate answered (self-assessed)
+    last_at     TEXT NOT NULL,
+    UNIQUE(job_id, category, question_id)
+);
+
+CREATE TABLE IF NOT EXISTS apply_locks (
+    job_id      TEXT PRIMARY KEY,            -- one browser session per application
+    owner       TEXT NOT NULL,               -- task label / pid that holds the lock
+    acquired_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS batch_runs (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    label       TEXT NOT NULL,
+    job_ids     TEXT NOT NULL,               -- JSON list
+    controls    TEXT,                        -- JSON: the gates this batch ran under
+    result      TEXT,                        -- JSON: per-job outcome summary
+    created_at  TEXT NOT NULL,
+    finished_at TEXT
+);
+"""
+
+# Performance indexes for the hot paths (queue listing, dashboard, email review).
+PERF_INDEXES = """
+CREATE INDEX IF NOT EXISTS idx_jobs_queue ON jobs(queue_state, COALESCE(score, prefit, 0) DESC);
+CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+CREATE INDEX IF NOT EXISTS idx_jobs_company ON jobs(lower(company));
+CREATE INDEX IF NOT EXISTS idx_submissions_day ON submissions(submitted_at);
+CREATE INDEX IF NOT EXISTS idx_emails_received ON email_messages(received_at);
 """
 
 
@@ -216,10 +289,20 @@ def _migrate(conn: sqlite3.Connection) -> None:
     """Idempotent: creates missing tables and adds missing columns. Never drops data."""
     conn.executescript(SCHEMA)
     conn.executescript(EXTRA_TABLES)
+    for stmt in PERF_INDEXES.strip().split(";"):
+        if stmt.strip():
+            try:
+                conn.execute(stmt)
+            except sqlite3.OperationalError:      # older sqlite without expression indexes
+                continue
     cols = {r["name"] for r in conn.execute("PRAGMA table_info(jobs)")}
     for name, decl in NEW_COLUMNS.items():
         if name not in cols:
             conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {decl}")
+    # Phase 18: entity storage on email_messages (older installs lack the column)
+    email_cols = {r["name"] for r in conn.execute("PRAGMA table_info(email_messages)")}
+    if "entities" not in email_cols:
+        conn.execute("ALTER TABLE email_messages ADD COLUMN entities TEXT")
 
 
 # ---------------------------------------------------------------- verification + queue helpers
@@ -552,21 +635,184 @@ def submissions_for(job_id: str) -> list[sqlite3.Row]:
                             (job_id,)).fetchall()
 
 
+# ---------------------------------------------------------------- Phase 18 tables
+
+def save_company_intel(company: str, intel: dict, sources: list[str]) -> None:
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO company_intel (company, intel_json, sources, created_at, updated_at) "
+            "VALUES (?,?,?,?,?) ON CONFLICT(company) DO UPDATE SET "
+            "intel_json=excluded.intel_json, sources=excluded.sources, "
+            "updated_at=excluded.updated_at",
+            (company.strip().lower(), json.dumps(intel), json.dumps(sources), now(), now()))
+
+
+def get_company_intel(company: str, max_age_hours: int = 24 * 7) -> dict | None:
+    """Cached company research, or None when absent/stale."""
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM company_intel WHERE company = ?",
+                           (company.strip().lower(),)).fetchone()
+    if not row:
+        return None
+    try:
+        age = (datetime.now(timezone.utc)
+               - datetime.fromisoformat(row["updated_at"])).total_seconds() / 3600
+    except ValueError:
+        age = max_age_hours + 1
+    if age > max_age_hours:
+        return None
+    try:
+        return {"intel": json.loads(row["intel_json"]),
+                "sources": json.loads(row["sources"] or "[]"),
+                "updated_at": row["updated_at"]}
+    except ValueError:
+        return None
+
+
+def record_agent_run(agent: str, job_id: str | None, prompt_version: str, model: str = "",
+                     duration_ms: int = 0, cached: bool = False, ok: bool = True,
+                     error: str = "", result_summary: str = "") -> None:
+    """One row per agent execution — the audit trail behind /api/agents/history."""
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO agent_runs (agent, job_id, prompt_version, model, duration_ms, "
+            "cached, ok, error, result_summary, created_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (agent, job_id, prompt_version, model, int(duration_ms), int(cached), int(ok),
+             error[:500], result_summary[:300], now()))
+
+
+def agent_runs(limit: int = 100, agent: str = "", job_id: str = "") -> list[sqlite3.Row]:
+    q, args = "SELECT * FROM agent_runs", []
+    where = []
+    if agent:
+        where.append("agent = ?")
+        args.append(agent)
+    if job_id:
+        where.append("job_id = ?")
+        args.append(job_id)
+    if where:
+        q += " WHERE " + " AND ".join(where)
+    q += " ORDER BY id DESC LIMIT ?"
+    args.append(limit)
+    with connect() as conn:
+        return conn.execute(q, args).fetchall()
+
+
+def save_interview_prep(job_id: str, plan: dict) -> None:
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO interview_prep (job_id, plan_json, created_at, updated_at) "
+            "VALUES (?,?,?,?) ON CONFLICT(job_id) DO UPDATE SET "
+            "plan_json=excluded.plan_json, updated_at=excluded.updated_at",
+            (job_id, json.dumps(plan), now(), now()))
+
+
+def get_interview_prep(job_id: str) -> dict | None:
+    with connect() as conn:
+        row = conn.execute("SELECT plan_json FROM interview_prep WHERE job_id = ?",
+                           (job_id,)).fetchone()
+    if not row:
+        return None
+    try:
+        return json.loads(row["plan_json"])
+    except ValueError:
+        return None
+
+
+def track_prep_progress(job_id: str, category: str, question_id: str,
+                        answered: bool) -> None:
+    with connect() as conn:
+        conn.execute(
+            "INSERT INTO prep_progress (job_id, category, question_id, attempted, answered, "
+            "last_at) VALUES (?,?,?,?,?,?) "
+            "ON CONFLICT(job_id, category, question_id) DO UPDATE SET "
+            "attempted = prep_progress.attempted + 1, "
+            "answered = prep_progress.answered + ?, last_at = excluded.last_at",
+            (job_id, category, question_id, 1, int(answered), now(), int(answered)))
+
+
+def prep_progress_summary(job_id: str) -> dict:
+    """Per-category progress for the dashboard: attempted/answered counts."""
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT category, COUNT(*) questions, SUM(attempted) attempted, "
+            "SUM(answered) answered FROM prep_progress WHERE job_id = ? GROUP BY category",
+            (job_id,)).fetchall()
+    return {r["category"]: {"questions": r["questions"], "attempted": r["attempted"] or 0,
+                            "answered": r["answered"] or 0} for r in rows}
+
+
+def acquire_apply_lock(job_id: str, owner: str, max_age_seconds: int = 3600) -> bool:
+    """One browser session per application. A stale lock (>max_age) is taken over."""
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM apply_locks WHERE job_id = ?", (job_id,)).fetchone()
+        if row:
+            try:
+                age = (datetime.now(timezone.utc)
+                       - datetime.fromisoformat(row["acquired_at"])).total_seconds()
+            except ValueError:
+                age = max_age_seconds + 1
+            if age < max_age_seconds:
+                return False                       # held by a live session
+            conn.execute("DELETE FROM apply_locks WHERE job_id = ?", (job_id,))
+        conn.execute("INSERT OR REPLACE INTO apply_locks (job_id, owner, acquired_at) "
+                     "VALUES (?,?,?)", (job_id, owner, now()))
+        return True
+
+
+def release_apply_lock(job_id: str, owner: str | None = None) -> None:
+    with connect() as conn:
+        if owner:
+            conn.execute("DELETE FROM apply_locks WHERE job_id = ? AND owner = ?",
+                         (job_id, owner))
+        else:
+            conn.execute("DELETE FROM apply_locks WHERE job_id = ?", (job_id,))
+
+
+def apply_lock_holder(job_id: str) -> str | None:
+    with connect() as conn:
+        row = conn.execute("SELECT owner FROM apply_locks WHERE job_id = ?",
+                           (job_id,)).fetchone()
+    return row["owner"] if row else None
+
+
+def create_batch_run(label: str, job_ids: list[str], controls: dict) -> int:
+    with connect() as conn:
+        cur = conn.execute(
+            "INSERT INTO batch_runs (label, job_ids, controls, created_at) VALUES (?,?,?,?)",
+            (label, json.dumps(job_ids), json.dumps(controls), now()))
+        return int(cur.lastrowid)
+
+
+def finish_batch_run(batch_id: int, result: dict) -> None:
+    with connect() as conn:
+        conn.execute("UPDATE batch_runs SET result = ?, finished_at = ? WHERE id = ?",
+                     (json.dumps(result), now(), batch_id))
+
+
+def batch_runs(limit: int = 20) -> list[sqlite3.Row]:
+    with connect() as conn:
+        return conn.execute("SELECT * FROM batch_runs ORDER BY id DESC LIMIT ?",
+                            (limit,)).fetchall()
+
+
 # ---------------------------------------------------------------- email messages (17.9)
 
 def upsert_email(msg: dict) -> bool:
     """Insert one classified email; returns False if the Message-ID was already stored."""
+    entities = msg.get("entities")
+    entities_json = json.dumps(entities) if entities else None
     with connect() as conn:
         if conn.execute("SELECT 1 FROM email_messages WHERE message_id = ?",
                         (msg["message_id"],)).fetchone():
             return False
         conn.execute("INSERT INTO email_messages (message_id, sender, subject, snippet, received_at,"
-                     " classification, confidence, matched_job_id, reviewed, created_at)"
-                     " VALUES (?,?,?,?,?,?,?,?,0,?)",
+                     " classification, confidence, matched_job_id, reviewed, entities, created_at)"
+                     " VALUES (?,?,?,?,?,?,?,?,0,?,?)",
                      (msg["message_id"], msg.get("sender", ""), msg.get("subject", ""),
                       msg.get("snippet", ""), msg.get("received_at", now()),
                       msg.get("classification"), msg.get("confidence"),
-                      msg.get("matched_job_id"), now()))
+                      msg.get("matched_job_id"), entities_json, now()))
         return True
 
 

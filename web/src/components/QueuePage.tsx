@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
-import { ListChecks, Play, RefreshCw, ShieldCheck, Sparkles } from "lucide-react";
-import { api, ELIGIBILITY_META, type QueueLimits, type QueueRow } from "../api";
+import { Gauge, ListChecks, Play, RefreshCw, ShieldCheck, Sparkles } from "lucide-react";
+import { api, ELIGIBILITY_META, type BatchControls, type QueueLimits, type QueueRow, type ReadinessScore } from "../api";
 import { Card, useToast } from "./ui";
 const QUEUE_META: Record<string, { label: string; cls: string }> = {
   new: { label: "New", cls: "bg-slate-100 text-slate-600" },
@@ -30,12 +30,23 @@ function Chip({ meta }: { meta: { label: string; cls: string } }) {
   return <span className={`inline-block whitespace-nowrap rounded px-1.5 py-0.5 text-[11px] font-medium ${meta.cls}`}>{meta.label}</span>;
 }
 
+function readinessCls(score: number): string {
+  if (score >= 85) return "text-emerald-600";
+  if (score >= 70) return "text-blue-600";
+  if (score >= 50) return "text-amber-600";
+  return "text-red-600";
+}
+
 export function QueuePage({ onStarted }: { onStarted: () => void }) {
   const toast = useToast();
   const [rows, setRows] = useState<QueueRow[]>([]);
   const [limits, setLimits] = useState<QueueLimits | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [readiness, setReadiness] = useState<Record<string, ReadinessScore>>({});
+  const [excluded, setExcluded] = useState("");
+  const [batchBusy, setBatchBusy] = useState(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -84,6 +95,53 @@ export function QueuePage({ onStarted }: { onStarted: () => void }) {
     }
   };
 
+  const checkReadiness = async (jobId: string) => {
+    setBusy(`${jobId}:readiness`);
+    try {
+      const r = await api.readiness(jobId);
+      setReadiness((prev) => ({ ...prev, [jobId]: r }));
+      const blockers = r.blocking_issues.length;
+      toast(`Readiness ${r.overall}/100${blockers ? ` — ${blockers} blocking issue(s)` : ""}`,
+        r.submission_ready ? "ok" : "error");
+    } catch (e) {
+      toast(String(e), "error");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const toggle = (jobId: string) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(jobId)) next.delete(jobId);
+      else next.add(jobId);
+      return next;
+    });
+  };
+
+  const batchPrepare = async () => {
+    const ids = Array.from(selected);
+    if (!ids.length) return;
+    setBatchBusy(true);
+    try {
+      const controls: BatchControls = {};
+      const ex = excluded.split(",").map((s) => s.trim()).filter(Boolean);
+      if (ex.length) controls.excluded_companies = ex;
+      const out = await api.batchPrepare(ids, controls);
+      toast(`Batch: ${out.prepared} prepared, ${out.skipped} skipped`, out.prepared ? "ok" : "error");
+      const skipped = out.results.filter((r) => r.skipped);
+      if (skipped.length) {
+        toast(`Skipped: ${skipped.map((s) => `${s.company ?? s.job_id} (${s.skipped})`).join("; ").slice(0, 220)}`, "error");
+      }
+      setSelected(new Set());
+      await refresh();
+    } catch (e) {
+      toast(String(e), "error");
+    } finally {
+      setBatchBusy(false);
+    }
+  };
+
   const visible = filter ? rows.filter((r) => r.queue_state === filter) : rows;
   const states = Array.from(new Set(rows.map((r) => r.queue_state)));
 
@@ -105,6 +163,27 @@ export function QueuePage({ onStarted }: { onStarted: () => void }) {
         </button>
       </div>
 
+      {/* Phase 18: controlled batch preparation (preparation only - submission stays per-job) */}
+      {selected.size > 0 && (
+        <Card className="flex flex-wrap items-center gap-3 border-blue-200 bg-blue-50/60 p-3">
+          <span className="text-sm font-medium text-blue-800">{selected.size} selected</span>
+          <input
+            value={excluded}
+            onChange={(e) => setExcluded(e.target.value)}
+            placeholder="excluded companies (comma separated, optional)"
+            className="min-w-56 flex-1 rounded-lg border border-blue-200 bg-white px-2.5 py-1.5 text-sm"
+          />
+          <button disabled={batchBusy} onClick={batchPrepare}
+            className="rounded-lg bg-blue-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-blue-700 disabled:opacity-40">
+            <Sparkles className="mr-1 inline size-3.5" />
+            {batchBusy ? "Preparing…" : "Prepare selected (batch)"}
+          </button>
+          <span className="text-xs text-slate-500">
+            Prepares resumes + answers with quality gates. Each submission still needs its own approval.
+          </span>
+        </Card>
+      )}
+
       <div className="flex flex-wrap gap-1.5">
         <button onClick={() => setFilter("")}
           className={`rounded-lg px-2.5 py-1 text-sm ${filter === "" ? "bg-blue-50 font-medium text-blue-700" : "text-slate-600 hover:bg-slate-100"}`}>
@@ -122,12 +201,14 @@ export function QueuePage({ onStarted }: { onStarted: () => void }) {
         <table className="w-full text-sm">
           <thead>
             <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
+              <th className="w-8 px-2 py-2.5"></th>
               <th className="px-3 py-2.5">Company / Role</th>
               <th className="px-3 py-2.5">Salary</th>
               <th className="px-3 py-2.5">Location</th>
               <th className="px-3 py-2.5">Eligibility</th>
               <th className="px-3 py-2.5">Match</th>
               <th className="px-3 py-2.5">Quality</th>
+              <th className="px-3 py-2.5">Readiness</th>
               <th className="px-3 py-2.5">Verification</th>
               <th className="px-3 py-2.5">Deadline</th>
               <th className="px-3 py-2.5">Resume</th>
@@ -136,8 +217,14 @@ export function QueuePage({ onStarted }: { onStarted: () => void }) {
             </tr>
           </thead>
           <tbody>
-            {visible.map((r) => (
+            {visible.map((r) => {
+              const rd = readiness[r.job_id];
+              return (
               <tr key={r.job_id} className="border-b border-slate-100 last:border-0 hover:bg-slate-50/60">
+                <td className="px-2 py-2.5">
+                  <input type="checkbox" checked={selected.has(r.job_id)} onChange={() => toggle(r.job_id)}
+                    className="size-3.5 accent-blue-600" title="Select for batch preparation" />
+                </td>
                 <td className="px-3 py-2.5">
                   <div className="font-medium text-slate-800">{r.company}</div>
                   <div className="text-xs text-slate-500">{r.title}</div>
@@ -153,6 +240,21 @@ export function QueuePage({ onStarted }: { onStarted: () => void }) {
                 </td>
                 <td className="px-3 py-2.5 font-semibold text-slate-700">{r.match_score ?? "—"}</td>
                 <td className="px-3 py-2.5 text-slate-600">{r.quality_score ?? "—"}</td>
+                <td className="px-3 py-2.5">
+                  <div className="flex items-center gap-1.5">
+                    {rd && <span className={`font-semibold ${readinessCls(rd.overall)}`}>{rd.overall}</span>}
+                    <button disabled={busy !== null} onClick={() => checkReadiness(r.job_id)}
+                      className="rounded border border-slate-200 px-1.5 py-0.5 text-xs text-slate-600 hover:bg-slate-100 disabled:opacity-40"
+                      title="Application readiness score (9 dimensions)">
+                      <Gauge className="inline size-3" />
+                    </button>
+                  </div>
+                  {rd && rd.blocking_issues.length > 0 && (
+                    <div className="mt-0.5 max-w-44 text-[11px] text-red-600" title={rd.blocking_issues.join("\n")}>
+                      {rd.blocking_issues.length} blocking issue{rd.blocking_issues.length > 1 ? "s" : ""}
+                    </div>
+                  )}
+                </td>
                 <td className="px-3 py-2.5">
                   <Chip meta={VERIFY_META[r.verification_state] ?? { label: r.verification_state, cls: "bg-slate-100 text-slate-500" }} />
                 </td>
@@ -191,9 +293,10 @@ export function QueuePage({ onStarted }: { onStarted: () => void }) {
                   </div>
                 </td>
               </tr>
-            ))}
+              );
+            })}
             {visible.length === 0 && (
-              <tr><td colSpan={11} className="px-3 py-10 text-center text-sm text-slate-400">
+              <tr><td colSpan={13} className="px-3 py-10 text-center text-sm text-slate-400">
                 Queue is empty. Run a search, then use "Analyze" on jobs from the Jobs page drawer
                 (or queue action buttons here once jobs are tracked).
               </td></tr>
@@ -203,10 +306,10 @@ export function QueuePage({ onStarted }: { onStarted: () => void }) {
       </Card>
       <p className="text-xs text-slate-400">
         Gates block low-quality applications automatically: daily/company caps, match + quality +
-        eligibility floors, fraud flags, duplicate submissions and verification state. Auto-submit
-        requires both per-job approval and <code>automation.authorized_submission: true</code> in
-        config.yaml — and it still stops on CAPTCHAs, logins, legal declarations or unanswered
-        sensitive questions.
+        eligibility floors, fraud flags, duplicate submissions and verification state. Batch prepare
+        only PREPARES applications; every submission needs its own approval. Auto-submit requires
+        both per-job approval and <code>automation.authorized_submission: true</code> in config.yaml —
+        and it still stops on CAPTCHAs, logins, legal declarations or unanswered sensitive questions.
       </p>
     </div>
   );
