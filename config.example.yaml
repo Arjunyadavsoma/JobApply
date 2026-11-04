@@ -78,6 +78,12 @@ sources:
   arbeitnow:                # EU + international remote jobs (public API, no key)
     enabled: false
     pages: 1
+  himalayas:                # remote-first board, cursor-paginated firehose (public API)
+    enabled: true
+    pages: 1                # = 5 API pages x 20 jobs scanned, keyword+India filtered
+  jobicy:                   # remote dev jobs, tag search (public API)
+    enabled: true
+    pages: 1
   # Company career portals. Use the board slug from the careers URL:
   #   Greenhouse: https://job-boards.greenhouse.io/<slug>   or boards.greenhouse.io/<slug>
   #   Lever:      https://jobs.lever.co/<slug>
@@ -125,6 +131,29 @@ llm:
   score_effort: low
   tailor_effort: high
   form_effort: medium
+
+# Phase 17: application quality gates + the three execution modes.
+# MODE A (discovery) and MODE B (assisted - agent fills, YOU submit) are always available.
+# MODE C (authorized submission) needs BOTH automation.authorized_submission: true below
+# AND per-job approval in the Queue page. It still stops on CAPTCHAs, login walls,
+# legal declarations and sensitive questions - by design, never bypassed.
+automation:
+  authorized_submission: false   # keep false unless you really want auto-submit
+  max_per_day: 15                # application budget per day
+  max_per_company: 2             # don't spam one employer
+  min_match_score: 70            # only apply to real matches
+  min_eligibility: likely_eligible   # eligible | likely_eligible | needs_verification
+  min_quality_score: 40          # job verification quality floor (0-100)
+  min_salary_lpa: 6              # CTC floor from your profile
+  preferred_locations: [Hyderabad, Bengaluru, Chennai, Pune, Mumbai, Gurugram, Noida, Remote]
+
+# Phase 17: optional email monitoring (READ-ONLY; nothing is ever auto-sent).
+# Gmail: run scripts in README (OAuth, gmail.readonly scope) - token lands in data/gmail_token.json.
+# IMAP: set imap_host/imap_user + EMAIL_IMAP_PASSWORD env var (works with Gmail app passwords).
+email:
+  transport: ''                  # '' (off) | gmail | imap
+  imap_host: ''                  # e.g. imap.gmail.com
+  imap_user: ''                  # your address
 
 browser:
   channel: chrome           # chrome or msedge (Edge is built into Windows)

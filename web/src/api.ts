@@ -230,7 +230,80 @@ export const api = {
     return request<Task>("/api/resume/upload", { method: "POST", body: fd });
   },
   openResumeJson: () => post("/api/resume/open"),
+
+  // ---- Phase 17: queue, agents, verification, external sources, emails, tasks ----
+  queue: (states?: string[]) => {
+    const qs = states?.length ? `?states=${encodeURIComponent(states.join(","))}` : "";
+    return request<{ rows: QueueRow[]; limits: QueueLimits; daily_used: number }>(`/api/queue${qs}`);
+  },
+  queueAction: (jobId: string, action: "analyze" | "shortlist" | "prepare" | "approve") =>
+    post<{ ok?: boolean; error?: string; queue_state?: string }>(`/api/queue/${jobId}/action/${action}`),
+  queueApply: (jobId: string, mode: "assisted" | "authorized", tailor = true) =>
+    post<{ ok: boolean; mode?: string; error?: string; task?: Task }>(`/api/queue/${jobId}/apply`, { mode, tailor }),
+  agents: () => request<{ key: string; name: string; prompt_version: string; description: string }[]>("/api/agents"),
+  runAgent: (agent: string, jobId: string, question?: string) =>
+    post<Record<string, unknown>>(`/api/agents/${agent}/jobs/${jobId}`, question ? { notes: question } : undefined),
+  searchProfiles: () =>
+    request<{ profiles: Record<string, unknown>[]; active: Record<string, unknown> | null;
+              quick_views: { key: string; label: string; filters: string }[] }>("/api/search-profiles"),
+  applySearchProfile: (name: string) => post(`/api/search-profiles/${encodeURIComponent(name)}/apply`),
+  externalSources: () =>
+    request<{ key: string; name: string; priority: number; reason: string; kind: string;
+              search_url: string | null; fresher_url: string | null }[]>("/api/sources/external"),
+  atsDetect: (url: string) =>
+    request<{ platform: string; name: string; confidence: number; notes: string }>(`/api/ats/detect?url=${encodeURIComponent(url)}`),
+  emails: (unreviewed = false) => request<EmailMessage[]>(`/api/emails${unreviewed ? "?unreviewed=true" : ""}`),
+  emailStatus: () => request<{ configured: boolean; transport: string | null; note: string }>("/api/emails/status"),
+  syncEmails: () => post<{ ok: boolean; new?: number; duplicate?: number; needs_review?: number }>("/api/emails/sync"),
+  taskHistory: () => request<{ id: number; label: string; started_at: string; ended_at: string | null }[]>("/api/tasks"),
+  backup: () => post<{ ok: boolean; path: string; bytes: number }>("/api/backup"),
 };
+
+export interface QueueRow {
+  job_id: string;
+  company: string;
+  title: string;
+  salary: string | null;
+  stipend: number | null;
+  location: string | null;
+  remote_type: string | null;
+  match_score: number | null;
+  quality_score: number | null;
+  verification_state: string;
+  eligibility: string;
+  deadline: string | null;
+  deadline_urgency: number;
+  resume_ready: boolean;
+  queue_state: string;
+  pipeline_status: string;
+  apply_allowed: boolean;
+  apply_block_reason: string;
+}
+
+export interface QueueLimits {
+  max_per_day: number;
+  max_per_company: number;
+  min_match_score: number;
+  min_eligibility: string;
+  min_quality_score: number;
+  min_salary_lpa: number;
+  preferred_locations: string[];
+  authorized_submission: boolean;
+  daily_used: number;
+}
+
+export interface EmailMessage {
+  id: number;
+  message_id: string;
+  sender: string;
+  subject: string;
+  snippet: string;
+  received_at: string;
+  classification: string | null;
+  confidence: number;
+  matched_job_id: string | null;
+  reviewed: number;
+}
 
 export const STATUS_META: Record<Status, { label: string; cls: string }> = {
   new: { label: "Not scored", cls: "bg-slate-100 text-slate-600" },

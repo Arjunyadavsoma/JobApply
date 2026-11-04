@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  BarChart3, Briefcase, Brain, CircleAlert, FileText, KanbanSquare, Search, Settings, User,
+  BarChart3, Briefcase, Brain, CircleAlert, FileText, KanbanSquare, ListChecks, Search, Settings, User,
 } from "lucide-react";
 import { api, type Config, type JobSummary, type Stats, type Task } from "./api";
 import { AnalyticsPage } from "./components/AnalyticsPage";
@@ -10,13 +10,14 @@ import { JobDrawer } from "./components/JobDrawer";
 import { JobsTable } from "./components/JobsTable";
 import { NotificationsBell } from "./components/NotificationsBell";
 import { ProfilePage } from "./components/ProfilePage";
+import { QueuePage } from "./components/QueuePage";
 import { ResumePage } from "./components/ResumePage";
 import { SearchPanel } from "./components/SearchPanel";
 import { SettingsPage } from "./components/SettingsPage";
 import { TaskPanel } from "./components/TaskPanel";
 import { Card, ToastProvider } from "./components/ui";
 
-type Page = "jobs" | "applications" | "analytics" | "assistant" | "resume" | "profile" | "settings";
+type Page = "jobs" | "queue" | "applications" | "analytics" | "assistant" | "resume" | "profile" | "settings";
 
 function StatCard({ label, value, tone }: { label: string; value: number; tone: string }) {
   return (
@@ -93,6 +94,7 @@ export default function App() {
 
   const NAV: { id: Page; label: string; icon: React.ReactNode }[] = [
     { id: "jobs", label: "Jobs", icon: <Search className="size-4" /> },
+    { id: "queue", label: "Queue", icon: <ListChecks className="size-4" /> },
     { id: "applications", label: "Applications", icon: <KanbanSquare className="size-4" /> },
     { id: "analytics", label: "Analytics", icon: <BarChart3 className="size-4" /> },
     { id: "assistant", label: "AI Assistant", icon: <Brain className="size-4" /> },
@@ -169,6 +171,12 @@ export default function App() {
             <TaskPanel task={task} log={log} />
             <JobsTable jobs={jobs} stats={stats} selected={selected} onSelect={setSelected} running={running}
               onStarted={onStarted} />
+          </>
+        )}
+        {page === "queue" && (
+          <>
+            <TaskPanel task={task} log={log} />
+            <QueuePage onStarted={onStarted} />
           </>
         )}
         {page === "applications" && <ApplicationsPage onChanged={refresh} />}

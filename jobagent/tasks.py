@@ -52,10 +52,17 @@ def current() -> dict | None:
         t = json.loads(STATE.read_text(encoding="utf-8"))
     except (json.JSONDecodeError, OSError):
         return None
-    t["running"] = _alive(t["pid"]) if t.get("running") else False
+    was_running = bool(t.get("running"))
+    t["running"] = _alive(t["pid"]) if was_running else False
     if not t["running"] and t.get("ended") is None:
         t["ended"] = datetime.now().isoformat(timespec="seconds")
         STATE.write_text(json.dumps(t), encoding="utf-8")
+        if was_running and t.get("history_id"):
+            try:
+                from jobagent import db as _db
+                _db.record_task_end(t["history_id"])
+            except Exception:                                 # noqa: BLE001
+                pass
     return t
 
 
@@ -77,6 +84,12 @@ def start(label: str, *args: str) -> dict:
     t = {"label": label, "args": list(args), "pid": proc.pid, "log": str(log), "running": True,
          "started": datetime.now().isoformat(timespec="seconds"), "ended": None}
     STATE.write_text(json.dumps(t), encoding="utf-8")
+    # Phase 17.11: persistent task history (survives restarts, feeds /api/tasks)
+    try:
+        from jobagent import db as _db
+        t["history_id"] = _db.record_task_start(label, list(args), proc.pid, str(log))
+    except Exception:                                         # noqa: BLE001 - history is best-effort
+        t["history_id"] = None
     return t
 
 

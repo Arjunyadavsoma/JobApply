@@ -78,9 +78,10 @@ def source_health() -> dict:
 
 def discover(only: str | None = None) -> int:
     """`only`: None for every enabled source, or a comma-separated subset of
-    companies,linkedin,naukri,instahyre,remotive,arbeitnow."""
-    wanted = set(only.split(",")) if only else {"companies", "linkedin", "naukri", "instahyre",
-                                                "remotive", "arbeitnow"}
+    companies,linkedin,naukri,instahyre,remotive,arbeitnow,himalayas,jobicy."""
+    wanted = set(only.split(",")) if only else {
+        "companies", "linkedin", "naukri", "instahyre", "remotive", "arbeitnow",
+        "himalayas", "jobicy"}
     keywords = cfg("search.keywords", [])
     locations = cfg("search.locations", [])
     jobs: list[Job] = []
@@ -88,22 +89,39 @@ def discover(only: str | None = None) -> int:
 
     with httpx.Client(headers={"User-Agent": USER_AGENT}, timeout=30, follow_redirects=True,
                       transport=httpx.HTTPTransport(retries=3)) as http:
-        if "companies" in wanted:
-            companies_cfg = cfg("sources.companies", {}) or {}
-            from jobagent.sources import india_companies
-            if not companies_cfg.get("portals") and not companies_cfg.get("workday") \
-                    and cfg("search.use_india_registry", True):
-                companies_cfg = india_companies.seed_config(companies_cfg)
-                log.info(f"india registry: seeded {len(india_companies.REGISTRY)} company career pages")
+
+        # ---- concurrent simple-API fetchers (each is independent + rate-limited inside) ----
+        def _run(name: str, fn) -> None:
             try:
-                found = ats.fetch_companies(companies_cfg, http, keywords)
-                from jobagent.sources import portals
-                found += portals.fetch_portals(companies_cfg.get("portals", []), http, keywords)
-                jobs += found
-                health["career_portals"] = (len(found), "ok")
+                found = fn()
+                jobs.extend(found)
+                health[name] = (len(found), "ok")
             except Exception as e:                      # noqa: BLE001 - one bad source must not kill the run
-                health["career_portals"] = (0, str(e))
-                log.warning(f"career portals failed: {e}")
+                health[name] = (0, str(e))
+                log.warning(f"{name} failed: {e}")
+
+        simple: list[tuple[str, object]] = []
+
+        if "remotive" in wanted and (only or cfg("sources.remotive.enabled", True)):
+            from jobagent.sources import remotive
+            simple.append(("remotive", lambda: remotive.search(cfg("sources.remotive.pages", 1), http, keywords)))
+        if "arbeitnow" in wanted and (only or cfg("sources.arbeitnow.enabled", True)):
+            from jobagent.sources import arbeitnow
+            simple.append(("arbeitnow", lambda: arbeitnow.search(cfg("sources.arbeitnow.pages", 1), http, keywords)))
+        if "himalayas" in wanted and (only or cfg("sources.himalayas.enabled", True)):
+            from jobagent.sources import himalayas
+            simple.append(("himalayas", lambda: himalayas.search(cfg("sources.himalayas.pages", 1), http, keywords)))
+        if "jobicy" in wanted and (only or cfg("sources.jobicy.enabled", True)):
+            from jobagent.sources import jobicy
+            simple.append(("jobicy", lambda: jobicy.search(cfg("sources.jobicy.pages", 1), http, keywords)))
+
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(max_workers=cfg("search.ingest_concurrency", 4),
+                                thread_name_prefix="ingest") as pool:
+            futures = {pool.submit(_run, name, fn): name for name, fn in simple}
+            for fut in futures:
+                fut.result()          # _run never raises; join before the browser-dependent part
+
         if "linkedin" in wanted and (only or cfg("sources.linkedin.enabled", True)):
             try:
                 found = linkedin.search(keywords, locations, cfg("sources.linkedin.pages", 1),
@@ -128,24 +146,22 @@ def discover(only: str | None = None) -> int:
             except Exception as e:                      # noqa: BLE001
                 health["instahyre"] = (0, str(e))
                 log.warning(f"instahyre failed: {e}")
-        if "remotive" in wanted and (only or cfg("sources.remotive.enabled", True)):
+        if "companies" in wanted:
+            companies_cfg = cfg("sources.companies", {}) or {}
+            from jobagent.sources import india_companies
+            if not companies_cfg.get("portals") and not companies_cfg.get("workday") \
+                    and cfg("search.use_india_registry", True):
+                companies_cfg = india_companies.seed_config(companies_cfg)
+                log.info(f"india registry: seeded {len(india_companies.REGISTRY)} company career pages")
             try:
-                from jobagent.sources import remotive
-                found = remotive.search(cfg("sources.remotive.pages", 1), http, keywords)
+                found = ats.fetch_companies(companies_cfg, http, keywords)
+                from jobagent.sources import portals
+                found += portals.fetch_portals(companies_cfg.get("portals", []), http, keywords)
                 jobs += found
-                health["remotive"] = (len(found), "ok")
-            except Exception as e:                      # noqa: BLE001
-                health["remotive"] = (0, str(e))
-                log.warning(f"remotive failed: {e}")
-        if "arbeitnow" in wanted and (only or cfg("sources.arbeitnow.enabled", True)):
-            try:
-                from jobagent.sources import arbeitnow
-                found = arbeitnow.search(cfg("sources.arbeitnow.pages", 1), http, keywords)
-                jobs += found
-                health["arbeitnow"] = (len(found), "ok")
-            except Exception as e:                      # noqa: BLE001
-                health["arbeitnow"] = (0, str(e))
-                log.warning(f"arbeitnow failed: {e}")
+                health["career_portals"] = (len(found), "ok")
+            except Exception as e:                      # noqa: BLE001 - one bad source must not kill the run
+                health["career_portals"] = (0, str(e))
+                log.warning(f"career portals failed: {e}")
 
     if "naukri" in wanted and (only or cfg("sources.naukri.enabled", True)):
         try:
@@ -186,6 +202,27 @@ def discover(only: str | None = None) -> int:
     from jobagent import prefit
     prefit.update()
     _record_source_health(health)
+
+    # Phase 17.4: verify newly discovered jobs (HTTP + content + domain checks)
+    verified_states: dict[str, int] = {}
+    if inserted_ids:
+        from jobagent import verify as verify_engine
+        import httpx as _httpx
+        with _httpx.Client(follow_redirects=True, timeout=15,
+                           headers={"User-Agent": USER_AGENT}) as vhttp:
+            for jid in inserted_ids[: cfg("search.verify_new_limit", 25)]:
+                row = db.get(jid)
+                if not row:
+                    continue
+                try:
+                    res = verify_engine.verify_job_row(row, http=vhttp)
+                    verify_engine.persist(jid, res)
+                    verified_states[res.state] = verified_states.get(res.state, 0) + 1
+                except Exception as e:                    # noqa: BLE001
+                    log.debug(f"verify {jid}: {e}")
+                import time as _t
+                _t.sleep(0.4)                            # be a polite client
+
     log.info(f"Discovered {len(jobs)} jobs, {len(kept)} passed filters, {inserted} new "
-             f"({enriched} enriched)")
+             f"({enriched} enriched, {verified_states or 'no verification'})")
     return inserted

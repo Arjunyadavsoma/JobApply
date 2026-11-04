@@ -31,6 +31,7 @@ def env(tmp_path, monkeypatch):
     shutil.copy(REPO / "config.example.yaml", REPO / "config.yaml")
 
     import jobagent.config as config
+    config.load_config.cache_clear()          # never inherit a previous test's config edits
     monkeypatch.setattr(config, "DATA_DIR", data)
     monkeypatch.setattr(config, "PROFILE_DIR", profile)
     monkeypatch.setattr(config, "OUTPUT_DIR", output)
@@ -43,5 +44,6 @@ def env(tmp_path, monkeypatch):
     yield tmp_path
 
     (REPO / "config.yaml").unlink(missing_ok=True)
+    config.load_config.cache_clear()
     for name in RELOADABLE:
         importlib.reload(importlib.import_module(name))

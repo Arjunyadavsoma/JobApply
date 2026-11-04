@@ -25,8 +25,18 @@ batches, internships, off-campus drives, MNC career pages — and international 
   - **India MNC registry** seeded automatically (Microsoft, Amazon, Google, Oracle, NVIDIA, Adobe,
     Salesforce, ServiceNow, Accenture, Deloitte, PwC, EY, KPMG, Freshworks, Zoho, Razorpay, PhonePe,
     Swiggy, Flipkart, CRED, …)
-  - LinkedIn public search, Naukri, Instahyre, **Remotive** and **Arbeitnow** (public APIs)
+  - LinkedIn public search, Naukri, Instahyre, **Remotive**, **Arbeitnow**, **Himalayas** and
+    **Jobicy** (public APIs)
   - Location filter: India + remote-open-to-India; title filters; cross-source de-duplication
+  - **External-link discovery** for platforms that (legitimately) can't be ingested —
+    Internshala, Foundit, Freshersworld, Cutshort, Hirist, Unstop, Superset, TimesJobs, Shine,
+    Wellfound, Apna, WorkIndia, FirstNaukri, iimjobs: one click opens a keyword-tuned search,
+    with the evidence-based reason (robots.txt / bot protection) shown. No fake listings.
+- **Job verification engine** — every new job is checked (availability, redirects, content
+  plausibility, expiry markers, deadlines, company-domain match, suspicious domains, salary
+  sanity, freshness, source reliability) → *verified open / probably open / needs manual /
+  expired / suspicious / unavailable* + a 0-100 **quality score** separate from match score.
+  An HTTP 200 alone is never enough.
 - **Deterministic enrichment (no AI, fully explainable)** — every job gets structured facts:
   salary (LPA / monthly stipend, never confused with take-home), experience range, employment
   type, remote/hybrid/onsite, eligible graduation batches, CGPA/percentage cutoffs, backlog
@@ -46,6 +56,21 @@ batches, internships, off-campus drives, MNC career pages — and international 
   year, notice period, CTC, relocation); anything unanswerable or legal is outlined red for you
 - **Application CRM** — discovered → matched → ready → submitted → assessment → interview →
   offer, with a per-job timeline, notes, duplicate-application guard and deadline tracking
+- **Application queue with quality gates** — every opportunity walks new → analyzing →
+  eligible → shortlisted → resume prep → ready → awaiting approval → applying → submitted,
+  blocked automatically by daily/company caps, score/eligibility/quality floors, fraud flags
+  and duplicate submissions
+- **Three execution modes** — *Discovery* (search/verify/rank), *Assisted* (agent fills the
+  form, you review and submit — default), and *Authorized submission* (off by default;
+  needs a config flag **and** per-job approval **and** every gate, stops on CAPTCHA/login/
+  legal/sensitive questions, records confirmation evidence; a job is "submitted" only when
+  the platform confirms it)
+- **Eight Groq agents** — Job Research (new), Matching, Resume Tailoring, Cover Letter,
+  Application Answers, Application Quality, Interview Prep, Follow-up — one orchestration
+  layer, versioned prompts, all external text framed as untrusted
+- **Optional email monitoring (read-only)** — Gmail OAuth or IMAP; classifies
+  confirmations/assessments/interviews/rejections/offers, matches them to your applications,
+  flags low-confidence mail for review. Nothing is ever auto-sent.
 - **Analytics** — applications per week, score distribution, eligibility breakdown, missing
   skills, source quality: all from your own data, nothing fabricated
 - **AI assistant** — interview prep, recruiter follow-up emails, skill-gap reports with learning
@@ -60,6 +85,7 @@ batches, internships, off-campus drives, MNC career pages — and international 
 | Page | What you do there |
 |---|---|
 | **Jobs** | Search with your settings; India quick views (Fresher, 2027 batch, Internships, Hyderabad, Remote, Deadlines); live log; results with salary/batch/deadline facts |
+| **Queue** | The Phase 17 application queue: match/quality/eligibility/deadline columns, limits header, Analyze / Shortlist / Prepare / Approve / Assisted / Auto-submit actions |
 | **Job details** (click a row) | Eligibility table, match dimensions and reasons, **Tailor resume**, **Auto-fill application**, pipeline status, notes, fraud warnings, timeline |
 | **Applications** | CRM pipeline: ready → submitted → assessment → interview → offer, one-click transitions |
 | **Analytics** | Weekly applications, score and eligibility distributions, source quality, missing skills, upcoming deadlines |
@@ -149,14 +175,23 @@ suite, the TypeScript check, the dashboard build and the Docker build on every p
 
 ```bash
 pip install -r requirements.txt pytest
-GROQ_API_KEY=gsk_dummy python -m pytest tests/ -q     # 76 offline tests, no network
+GROQ_API_KEY=gsk_dummy python -m pytest tests/ -q                 # 136 offline tests, no network
+GROQ_API_KEY=gsk_dummy python -m pytest tests/e2e/ -m e2e -q      # 5 sandbox browser tests (local fixture)
+python -m pytest tests/e2e/test_live_adapters.py -m live -q       # 7 live public-API tests (read-only)
+python scripts/e2e_report.py                                      # regenerate PHASE_17_TEST_REPORT.md
 ```
 
 Covers: enrichment parsing (LPA/batches/CGPA/deadlines/fraud), eligibility classification,
 database migrations/dedup/events, the Groq layer (structured outputs, JSON-mode fallback,
 fallback model, usage tracking, caching, request budget), the API lifecycle (auth, filters,
-duplicate-application guard, upload validation), profile-aware prefit and the new source
-adapters with mocked HTTP.
+duplicate-application guard, upload validation), profile-aware prefit, source adapters with
+mocked HTTP — plus the Phase 17 suites: verification engine (10 checks / 6 states / quality
+score / SSRF + typo-squat guards), queue gates + limits + actions, execution modes
+(sensitive-field stops, confirmation evidence, no-submission-without-confirmation), ATS
+registry detection for 18 platforms, the 8-agent orchestration (untrusted framing, prompt
+versions), search profiles + new filters, email classification/matching (nothing ever sent),
+and the sandbox E2E form engine (real Chromium: extraction, all input types, file upload,
+multi-step, CAPTCHA detection, session checkpoints, authorized-mode refusal).
 
 ## Project structure
 
@@ -164,7 +199,15 @@ adapters with mocked HTTP.
 jobagent/
   sources/          discovery: portals.py (any careers URL + detection), ats.py (Greenhouse/
                     Lever/Ashby), ats_more.py (Workday/SmartRecruiters/Workable), linkedin.py,
-                    naukri.py, instahyre.py, arbeitnow.py, remotive.py, india_companies.py
+                    naukri.py, instahyre.py, arbeitnow.py, remotive.py, himalayas.py, jobicy.py,
+                    india_companies.py, external.py (evidence-based external-link registry)
+  verify.py         Phase 17 job verification engine (10 checks -> 6 states + quality score)
+  queue.py          Phase 17 application queue (11 states, quality gates, limits)
+  execution.py      Phase 17 execution modes (discovery / assisted / authorized)
+  agents.py         Phase 17 Groq agent orchestration (8 agents, versioned prompts)
+  ats_registry.py   Phase 17 ATS platform detection + automation quirks
+  email_sync.py     Phase 17 optional read-only email monitoring
+  search_profiles.py Phase 17 India-first saved search profiles
   enrich.py         deterministic India-first enrichment (salary/batch/CGPA/deadlines/fraud)
   eligibility.py    4-level eligibility engine (batch, CGPA, backlogs, experience)
   profile.py        structured candidate profile + form-facts bridge

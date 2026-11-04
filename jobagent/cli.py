@@ -116,6 +116,94 @@ def apply_one(job_id: str, tailor_first: bool = typer.Option(False, "--tailor"))
     run_one(job_id, tailor_first)
 
 
+@app.command("submit-authorized", hidden=True)
+def submit_authorized(job_id: str) -> None:
+    """Phase 17.6 MODE C browser worker. All gates were checked before spawn; this
+    command re-checks them, fills the form, and clicks Submit only when safe.
+    Stops (needs_manual + screenshot) on CAPTCHA, login walls, sensitive
+    questions, legal declarations or a missing platform confirmation."""
+    from jobagent.execution import (authorized_allowed, captcha_present, confirm_from_text,
+                                    record_authorized_result, sensitive_fields)
+    from jobagent.apply import extract_fields, autofill, _job_materials, _screenshot
+    from jobagent.browser import browser_context
+    from jobagent import db
+
+    ok, why = authorized_allowed()
+    if not ok:
+        console.print(f"[red]{why}[/red]")
+        raise SystemExit(2)
+    job = db.get(job_id)
+    if not job:
+        console.print("Job not found.")
+        raise SystemExit(2)
+    if (job["queue_state"] or "") != "awaiting_approval":
+        console.print(f"[red]Job is not approved for authorized submission "
+                      f"(state: {job['queue_state']}).[/red]")
+        raise SystemExit(2)
+
+    tailored, cover_letter, files = _job_materials(job)
+    db.save_session(job_id, "authorized", {"step": "browser-open", "url": job["apply_url"]})
+    stopped = ""
+    confirmed_text = ""
+    shot = ""
+    with browser_context() as ctx:
+        page = ctx.pages[0] if ctx.pages else ctx.new_page()
+        try:
+            page.goto(job["apply_url"], wait_until="domcontentloaded", timeout=60000)
+            page.wait_for_timeout(3000)
+        except Exception as e:                               # noqa: BLE001
+            record_authorized_result(job_id, confirmed=False, final_url=page.url if page else "",
+                                     stopped_reason=f"could not open page: {e}")
+            console.print(f"[red]Could not open page: {e}[/red]")
+            return
+        # Hard stops - never bypass protection, never answer sensitive questions for the user
+        if captcha_present(page):
+            stopped = "CAPTCHA/bot-protection detected - stopping (never bypassed)"
+        elif page.locator("input[type='password']").count() > 0:
+            stopped = "login wall detected - stopping (credentials are never entered)"
+        else:
+            db.save_session(job_id, "authorized", {"step": "filling", "url": page.url})
+            autofill(page, job, tailored, cover_letter, files)
+            fields = extract_fields(page, read_options=False)
+            sensitive = sensitive_fields([f.meta for f in fields.values()])
+            empty_required = [f.meta["label"] for f in fields.values()
+                              if f.meta.get("required") and not (f.meta.get("value") or "").strip()]
+            if sensitive:
+                stopped = "sensitive/legal fields need your answer: " + "; ".join(sensitive[:5])
+            elif empty_required:
+                stopped = "required fields still empty: " + "; ".join(empty_required[:5])
+            else:
+                # find the submit button and click it
+                try:
+                    for sel in ("button[type='submit']", "input[type='submit']",
+                                "button:has-text('Submit')", "button:has-text('Submit application')",
+                                "button:has-text('Submit Application')"):
+                        if page.locator(sel).count() > 0:
+                            page.locator(sel).first.click()
+                            break
+                    else:
+                        stopped = "no submit button found"
+                except Exception as e:                       # noqa: BLE001
+                    stopped = f"submit click failed: {e}"
+        if not stopped:
+            page.wait_for_timeout(5000)
+            shot = _screenshot(page, job_id, "authorized_result") or ""
+            confirmed_text = confirm_from_text(page.inner_text("body")[:5000]) or ""
+            if not confirmed_text:
+                stopped = "no confirmation phrase found after submit - check manually"
+        else:
+            shot = _screenshot(page, job_id, "authorized_stopped") or ""
+
+    result = record_authorized_result(job_id, confirmed=bool(confirmed_text),
+                                      final_url=page.url if page else "", screenshot=shot,
+                                      page_text=confirmed_text or "", stopped_reason=stopped)
+    if result["ok"]:
+        console.print(f"[green]Submission confirmed by the platform: {confirmed_text}[/green]")
+    else:
+        console.print(f"[red]Stopped without submitting: {stopped}[/red]")
+        console.print("Evidence saved. Resolve it in the browser and mark applied manually.")
+
+
 @app.command()
 def run() -> None:
     """discover + score in one go. Tailor / apply per job from the dashboard."""
@@ -202,6 +290,47 @@ def analytics() -> None:
         console.rule("Upcoming deadlines")
         for dl in d["upcoming_deadlines"][:10]:
             console.print(f"  {dl['deadline']}  {dl['company']} - {dl['title']}")
+
+
+@app.command()
+def backup(dest: Path = typer.Option(None, help="Where to write the backup (default: data/backups/)")) -> None:
+    """Phase 17.11: hot-backup the SQLite database (WAL-safe via the backup API)."""
+    import shutil
+    import sqlite3
+
+    from jobagent.config import DATA_DIR
+    from jobagent.db import DB_PATH
+
+    if dest is None:
+        backups = DATA_DIR / "backups"
+        backups.mkdir(parents=True, exist_ok=True)
+        stamp = __import__("datetime").datetime.now().strftime("%Y%m%d_%H%M%S")
+        dest = backups / f"jobs_{stamp}.db"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    src = sqlite3.connect(DB_PATH)
+    try:
+        dst = sqlite3.connect(dest)
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
+    console.print(f"[green]Backup written:[/green] {dest} ({dest.stat().st_size:,} bytes)")
+
+
+@app.command()
+def queue(limit: int = typer.Option(50)) -> None:
+    """Show the Phase 17 application queue (states, gates, limits)."""
+    from jobagent import queue as Q
+
+    t = Table("state", "company", "title", "match", "quality", "deadline", "gates")
+    for r in Q.queue_rows(limit=limit):
+        t.add_row(r["queue_state"], r["company"], r["title"][:40],
+                  str(r["match_score"] or "-"), str(r["quality_score"] if r["quality_score"] is not None else "-"),
+                  r["deadline"] or "-", "ok" if r["apply_allowed"] else r["apply_block_reason"][:40])
+    console.print(t)
+    console.print(f"Daily submissions: {Q.daily_submissions()} / {Q.limits()['max_per_day']}")
 
 
 @app.command()

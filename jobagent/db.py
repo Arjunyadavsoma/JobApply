@@ -78,6 +78,18 @@ NEW_COLUMNS: dict[str, str] = {
     "fraud_flags":       "TEXT",                   # JSON list of warnings (payment asked, ...), '' if clean
     "enriched_at":       "TEXT",                   # when deterministic enrichment last ran
     "eligibility_json":  "TEXT",                   # deterministic eligibility result (eligibility.py)
+    # ---- Phase 17: verification engine + application queue ----
+    "verification_state": "TEXT DEFAULT 'unverified'",  # verified_open|probably_open|needs_manual|expired|suspicious|unavailable|unverified
+    "verification_note": "TEXT",                   # human-readable result summary
+    "verify_method":     "TEXT",                   # http|content|sitemap|manual|...
+    "final_url":         "TEXT",                   # URL after redirects
+    "redirect_chain":    "TEXT",                   # JSON list of hops
+    "company_domain":    "TEXT",                   # registrable domain of the apply URL
+    "quality_score":     "INTEGER",                # 0-100 posting quality (separate from match score)
+    "first_verified_at": "TEXT",
+    "queue_state":       "TEXT DEFAULT 'new'",     # application queue state (queue.py)
+    "queue_ready":       "INTEGER DEFAULT 0",      # 1 = resume tailored + answers ready
+    "apply_mode":        "TEXT",                   # assisted | authorized (last execution mode)
 }
 
 EXTRA_TABLES = """
@@ -121,6 +133,54 @@ CREATE TABLE IF NOT EXISTS answers (
     updated_at  TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_answers_question ON answers(question);
+
+CREATE TABLE IF NOT EXISTS apply_sessions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id      TEXT NOT NULL,
+    mode        TEXT NOT NULL,               -- assisted | authorized
+    state_json  TEXT NOT NULL,               -- progress: step, filled fields, files, screenshots
+    status      TEXT NOT NULL DEFAULT 'open',-- open | completed | aborted | needs_human
+    created_at  TEXT NOT NULL,
+    updated_at  TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_sessions_job ON apply_sessions(job_id, updated_at);
+
+CREATE TABLE IF NOT EXISTS email_messages (
+    id            INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id    TEXT NOT NULL,             -- RFC822 Message-ID (dedup key)
+    sender        TEXT,
+    subject       TEXT,
+    snippet       TEXT,
+    received_at   TEXT NOT NULL,
+    classification TEXT,                     -- confirmation|assessment|interview|rejection|offer|recruiter|other
+    confidence    REAL,                      -- 0-1
+    matched_job_id TEXT,
+    reviewed      INTEGER NOT NULL DEFAULT 0,
+    created_at    TEXT NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_email_msgid ON email_messages(message_id);
+CREATE INDEX IF NOT EXISTS idx_email_job ON email_messages(matched_job_id);
+
+CREATE TABLE IF NOT EXISTS task_history (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    label       TEXT NOT NULL,
+    args        TEXT,                        -- JSON list
+    pid         INTEGER,
+    log         TEXT,
+    started_at  TEXT NOT NULL,
+    ended_at    TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_task_history_time ON task_history(started_at);
+
+CREATE TABLE IF NOT EXISTS submissions (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id      TEXT NOT NULL,
+    mode        TEXT NOT NULL,               -- assisted | authorized | manual
+    evidence    TEXT,                        -- JSON: confirmation text, screenshot paths, final URL
+    confirmed   INTEGER NOT NULL DEFAULT 0,  -- 1 = platform confirmed the submission
+    submitted_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_submissions_job ON submissions(job_id);
 """
 
 
@@ -160,6 +220,15 @@ def _migrate(conn: sqlite3.Connection) -> None:
     for name, decl in NEW_COLUMNS.items():
         if name not in cols:
             conn.execute(f"ALTER TABLE jobs ADD COLUMN {name} {decl}")
+
+
+# ---------------------------------------------------------------- verification + queue helpers
+
+VERIFICATION_STATES = ("verified_open", "probably_open", "needs_manual", "expired",
+                       "suspicious", "unavailable", "unverified")
+
+QUEUE_STATES = ("new", "analyzing", "eligible", "shortlisted", "resume_prep", "ready",
+                "awaiting_approval", "applying", "submitted", "failed", "needs_manual")
 
 
 def connect() -> sqlite3.Connection:
@@ -240,12 +309,15 @@ ALLOWED_FILTERS = {
     "status": "status = ?", "source": "source = ?", "company": "lower(company) LIKE lower(?)",
     "employment_type": "employment_type = ?", "remote_type": "remote_type = ?",
     "fresher_flag": "fresher_flag = ?", "walk_in": "walk_in = ?", "off_campus": "off_campus = ?",
-    "verified": "verified = ?",
+    "verified": "verified = ?", "verification_state": "verification_state = ?",
+    "queue_state": "queue_state = ?",
 }
 
 
 def query_jobs(filters: dict[str, Any] | None = None, search: str = "", min_score: int | None = None,
                batch_year: int | None = None, deadline_within_days: int | None = None,
+               location: str = "", min_salary: float | None = None, max_experience: float | None = None,
+               skills: str = "",
                order: str = "score DESC, prefit DESC, discovered_at DESC",
                limit: int = 200, offset: int = 0) -> list[sqlite3.Row]:
     """Filtered + paginated job query used by the API. Values are matched exactly per
@@ -259,6 +331,19 @@ def query_jobs(filters: dict[str, Any] | None = None, search: str = "", min_scor
     if search:
         where.append("(lower(title) LIKE lower(?) OR lower(company) LIKE lower(?))")
         params += [f"%{search}%"] * 2
+    if location:
+        where.append("(lower(COALESCE(location,'')) LIKE lower(?) OR remote_type = 'remote')")
+        params.append(f"%{location}%")
+    if skills:
+        where.append("lower(COALESCE(description,'')) LIKE lower(?)")
+        params.append(f"%{skills}%")
+    if min_salary is not None:
+        # salary floors are CTC in LPA on the jobs table
+        where.append("(COALESCE(salary_max, salary_min, 0) >= ? OR stipend > 0)")
+        params.append(min_salary)
+    if max_experience is not None:
+        where.append("(COALESCE(experience_min, 99) <= ?)")
+        params.append(max_experience)
     if min_score is not None:
         where.append("COALESCE(score, prefit, 0) >= ?")
         params.append(min_score)
@@ -421,3 +506,105 @@ def find_answer(question: str) -> sqlite3.Row | None:
         if score > best_score:
             best, best_score = r, score
     return best if best_score >= 2 else None
+
+
+# ---------------------------------------------------------------- apply sessions (17.5/17.6)
+
+def save_session(job_id: str, mode: str, state: dict) -> None:
+    """Persist apply progress so an interrupted session can be resumed."""
+    ts = now()
+    with connect() as conn:
+        row = conn.execute("SELECT id FROM apply_sessions WHERE job_id = ? AND status = 'open'",
+                           (job_id,)).fetchone()
+        if row:
+            conn.execute("UPDATE apply_sessions SET state_json = ?, updated_at = ? WHERE id = ?",
+                         (json.dumps(state), ts, row["id"]))
+        else:
+            conn.execute("INSERT INTO apply_sessions (job_id, mode, state_json, status, created_at,"
+                         " updated_at) VALUES (?,?,?,?,?,?)",
+                         (job_id, mode, json.dumps(state), "open", ts, ts))
+
+
+def load_session(job_id: str) -> sqlite3.Row | None:
+    with connect() as conn:
+        return conn.execute("SELECT * FROM apply_sessions WHERE job_id = ? AND status = 'open' "
+                            "ORDER BY id DESC", (job_id,)).fetchone()
+
+
+def close_session(job_id: str, status: str = "completed") -> None:
+    with connect() as conn:
+        conn.execute("UPDATE apply_sessions SET status = ?, updated_at = ? WHERE job_id = ? "
+                     "AND status = 'open'", (status, now(), job_id))
+
+
+# ---------------------------------------------------------------- submissions (17.6 evidence)
+
+def record_submission(job_id: str, mode: str, evidence: dict, confirmed: bool) -> None:
+    with connect() as conn:
+        conn.execute("INSERT INTO submissions (job_id, mode, evidence, confirmed, submitted_at) "
+                     "VALUES (?,?,?,?,?)",
+                     (job_id, mode, json.dumps(evidence), int(confirmed), now()))
+
+
+def submissions_for(job_id: str) -> list[sqlite3.Row]:
+    with connect() as conn:
+        return conn.execute("SELECT * FROM submissions WHERE job_id = ? ORDER BY id DESC",
+                            (job_id,)).fetchall()
+
+
+# ---------------------------------------------------------------- email messages (17.9)
+
+def upsert_email(msg: dict) -> bool:
+    """Insert one classified email; returns False if the Message-ID was already stored."""
+    with connect() as conn:
+        if conn.execute("SELECT 1 FROM email_messages WHERE message_id = ?",
+                        (msg["message_id"],)).fetchone():
+            return False
+        conn.execute("INSERT INTO email_messages (message_id, sender, subject, snippet, received_at,"
+                     " classification, confidence, matched_job_id, reviewed, created_at)"
+                     " VALUES (?,?,?,?,?,?,?,?,0,?)",
+                     (msg["message_id"], msg.get("sender", ""), msg.get("subject", ""),
+                      msg.get("snippet", ""), msg.get("received_at", now()),
+                      msg.get("classification"), msg.get("confidence"),
+                      msg.get("matched_job_id"), now()))
+        return True
+
+
+def emails(unreviewed_only: bool = False, limit: int = 200) -> list[sqlite3.Row]:
+    where = "WHERE reviewed = 0" if unreviewed_only else ""
+    with connect() as conn:
+        return conn.execute(f"SELECT * FROM email_messages {where} ORDER BY received_at DESC "
+                            f"LIMIT ?", (limit,)).fetchall()
+
+
+def review_email(email_id: int, classification: str | None = None,
+                 matched_job_id: str | None = None) -> None:
+    with connect() as conn:
+        if classification is not None:
+            conn.execute("UPDATE email_messages SET classification = ?, confidence = 1.0, "
+                         "reviewed = 1 WHERE id = ?", (classification, email_id))
+        elif matched_job_id is not None:
+            conn.execute("UPDATE email_messages SET matched_job_id = ?, reviewed = 1 WHERE id = ?",
+                         (matched_job_id, email_id))
+        else:
+            conn.execute("UPDATE email_messages SET reviewed = 1 WHERE id = ?", (email_id,))
+
+
+# ---------------------------------------------------------------- task history (17.11)
+
+def record_task_start(label: str, args: list, pid: int, log: str) -> int:
+    with connect() as conn:
+        cur = conn.execute("INSERT INTO task_history (label, args, pid, log, started_at) "
+                           "VALUES (?,?,?,?,?)",
+                           (label, json.dumps(args), pid, log, now()))
+        return cur.lastrowid
+
+
+def record_task_end(task_row_id: int) -> None:
+    with connect() as conn:
+        conn.execute("UPDATE task_history SET ended_at = ? WHERE id = ?", (now(), task_row_id))
+
+
+def task_history(limit: int = 50) -> list[sqlite3.Row]:
+    with connect() as conn:
+        return conn.execute("SELECT * FROM task_history ORDER BY id DESC LIMIT ?", (limit,)).fetchall()

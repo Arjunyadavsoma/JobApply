@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Sandbox ATS - Software Engineer (Fresher)</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 640px; margin: 40px auto; padding: 0 16px; }
+    label { display: block; font-weight: 500; margin-top: 14px; }
+    input, select, textarea { width: 100%; padding: 8px; margin-top: 4px; box-sizing: border-box; }
+    .step { border: 1px solid #ddd; border-radius: 8px; padding: 20px; }
+    button { margin-top: 16px; padding: 10px 18px; background: #2563eb; color: #fff; border: 0; border-radius: 6px; cursor: pointer; }
+    #step2 { display: none; }
+  </style>
+</head>
+<body>
+  <h1>Apply - Software Engineer (Fresher) at Sandbox Labs</h1>
+
+  <form id="applyForm" class="step">
+    <div id="step1">
+      <label for="fullname">Full Name <span style="color:#dc2626">*</span></label>
+      <input id="fullname" name="fullname" type="text" required placeholder="Your full name" />
+
+      <label for="email">Email <span style="color:#dc2626">*</span></label>
+      <input id="email" name="email" type="email" required placeholder="you@example.com" />
+
+      <label for="phone">Phone</label>
+      <input id="phone" name="phone" type="tel" placeholder="+91..." />
+
+      <label for="city">Current City</label>
+      <select id="city" name="city">
+        <option value="">Select a city</option>
+        <option>Hyderabad</option>
+        <option>Bengaluru</option>
+        <option>Pune</option>
+        <option>Chennai</option>
+      </select>
+
+      <label for="resume">Resume / CV (PDF) <span style="color:#dc2626">*</span></label>
+      <input id="resume" name="resume" type="file" accept=".pdf,.doc,.docx" required />
+
+      <fieldset>
+        <legend>Are you a 2027 graduate?</legend>
+        <label><input type="radio" name="batch" value="yes" /> Yes, 2027 batch</label>
+        <label><input type="radio" name="batch" value="no" /> No</label>
+      </fieldset>
+
+      <label for="experience">Years of professional experience</label>
+      <input id="experience" name="experience" type="number" value="" />
+
+      <button type="button" id="nextBtn" onclick="document.getElementById('step1').style.display='none';document.getElementById('step2').style.display='block';">Next</button>
+    </div>
+
+    <div id="step2">
+      <label for="why">Why do you want to work at Sandbox Labs?</label>
+      <textarea id="why" name="why" rows="4" maxlength="500" placeholder="Tell us..."></textarea>
+
+      <label for="aadhaar">Aadhaar Number (for onboarding)</label>
+      <input id="aadhaar" name="aadhaar" type="text" placeholder="XXXX-XXXX-XXXX" />
+
+      <label><input type="checkbox" name="consent" id="consent" /> I authorize Sandbox Labs to process my personal data for recruitment purposes.</label>
+
+      <button type="submit" id="submitBtn">Submit Application</button>
+    </div>
+  </form>
+</body>
+</html>

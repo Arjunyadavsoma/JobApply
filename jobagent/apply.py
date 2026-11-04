@@ -448,9 +448,13 @@ def run_one(job_id: str, tailor_first: bool = False) -> None:
 
     The dashboard writes "fill" (re-scan and fill the current page / next step) or "close" to
     data/apply_control.txt. The session also ends when you close the browser window.
+
+    Phase 17.5: progress is checkpointed into apply_sessions after every step, so an
+    interrupted session can be resumed and the queue knows what was already done.
     """
     import time
 
+    from jobagent.ats_registry import detect as detect_ats
     from jobagent.tasks import CONTROL
 
     job = db.get(job_id)
@@ -467,6 +471,14 @@ def run_one(job_id: str, tailor_first: bool = False) -> None:
     console.print("Using your " + ("tailored resume + cover letter" if cover_letter else "original resume (not tailored)"))
     CONTROL.unlink(missing_ok=True)
 
+    ats_info = detect_ats(job["apply_url"] or job["url"])
+    db.save_session(job_id, "assisted", {"step": "opening", "url": job["apply_url"],
+                                         "ats": ats_info["platform"], "tailored": bool(cover_letter)})
+    db.update(job_id, apply_mode="assisted")
+    console.print(f"ATS detected: [cyan]{ats_info['name']}[/cyan]"
+                  + (f" - {ats_info['notes']}" if ats_info["platform"] != "generic" else ""))
+    db.record_event(job_id, "apply", f"ATS: {ats_info['name']} ({ats_info['evidence']})")
+
     with browser_context() as ctx:
         page = ctx.pages[0] if ctx.pages else ctx.new_page()
         from jobagent import linkedin_apply
@@ -475,6 +487,7 @@ def run_one(job_id: str, tailor_first: bool = False) -> None:
         if linkedin_apply.is_linkedin(job["apply_url"] or job["url"]):
             try:
                 page = linkedin_apply.apply(page, job, tailored, cover_letter, files)
+                db.save_session(job_id, "assisted", {"step": "linkedin-form", "ats": "linkedin"})
             except PWError as e:
                 console.print(f"[red]LinkedIn step failed: {str(e).splitlines()[0]}[/red] - continue in Chrome, "
                               "then press 'Fill current page'.")
@@ -492,8 +505,11 @@ def run_one(job_id: str, tailor_first: bool = False) -> None:
                 console.print(f"{one_click}: log in if needed and click Apply yourself (it applies instantly with "
                               f"your {one_click} profile). If it opens a questionnaire or a company site, press "
                               "'Fill current page'.")
+                db.save_session(job_id, "assisted", {"step": "one-click", "ats": one_click.lower()})
             else:
                 autofill(page, job, tailored, cover_letter, files)
+                db.save_session(job_id, "assisted", {"step": "filled-first-page",
+                                                     "ats": ats_info["platform"]})
         console.print("\nReview the form in the browser and click Submit yourself. Then press "
                       "'Mark applied' in the dashboard. Close the browser window when done.")
 
@@ -512,11 +528,15 @@ def run_one(job_id: str, tailor_first: bool = False) -> None:
                     console.rule("Filling current page")
                     try:
                         linkedin_apply.fill_current(page, job, tailored, cover_letter, files)
+                        db.save_session(job_id, "assisted",
+                                        {"step": "filled", "ats": ats_info["platform"],
+                                         "last_url": page.url[:300]})
                     except PWError as e:
                         console.print(f"[red]{str(e).splitlines()[0]}[/red]")
                 elif cmd == "close":
                     break
             time.sleep(0.2)
+    db.save_session(job_id, "assisted", {"step": "browser-closed", "ats": ats_info["platform"]})
     console.print("Browser closed.")
 
 

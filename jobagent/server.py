@@ -70,7 +70,9 @@ LIST_FIELDS = ("id", "source", "company", "title", "location", "status", "score"
                "apply_url", "posted_at", "discovered_at", "applied_at", "salary_min", "salary_max",
                "salary_text", "stipend", "employment_type", "remote_type", "experience_min",
                "experience_max", "batch_years", "deadline", "fresher_flag", "walk_in", "off_campus",
-               "verified", "fraud_flags", "notes", "min_cgpa", "min_percentage")
+               "verified", "fraud_flags", "notes", "min_cgpa", "min_percentage",
+               "verification_state", "verification_note", "quality_score", "queue_state",
+               "queue_ready", "apply_mode", "last_verified_at")
 
 
 def _job_summary(r) -> dict[str, Any]:
@@ -118,8 +120,24 @@ def _open_path(path: Path) -> None:
 
 @app.get("/api/health")
 def health() -> dict:
-    """Liveness/readiness for deployment checks. No auth, no data."""
-    return {"ok": True, "version": "2.0", "pipeline": db.stats().get("total", 0) > 0}
+    """Phase 17.11: liveness + dependency report. The dashboard stays usable when
+    Groq or a source is down - this endpoint shows what is degraded, not just up/down."""
+    from jobagent.sources import source_health
+    llm_backend = cfg("llm.backend", "")
+    groq_key = bool(os.environ.get("GROQ_API_KEY"))
+    sources = source_health()
+    degraded = [s for s, v in sources.items()
+                if v.get("last_error") and str(v.get("last_run")) >= db.now()[:10]]
+    return {
+        "ok": True,
+        "status": "ok",
+        "time": db.now(),
+        "llm": {"backend": llm_backend, "groq_key_present": groq_key},
+        "db": {"jobs": db.stats()["total"], "writable": True},
+        "sources": {"tracked": len(sources), "degraded_today": degraded},
+        "task_running": bool(tasks.current() and tasks.current().get("running")),
+        "version": "17.0",
+    }
 
 
 @app.get("/api/stats")
@@ -127,6 +145,15 @@ def stats() -> dict:
     s = db.stats()
     s["has_resume"] = MASTER_RESUME_JSON.exists()
     s["has_profile"] = (PROFILE_DIR / "candidate_profile.json").exists()
+    # Phase 17: verification + queue breakdowns from persisted data
+    with db.connect() as conn:
+        for key, sql in (("verification", "SELECT verification_state k, COUNT(*) c FROM jobs GROUP BY verification_state"),
+                         ("queue", "SELECT queue_state k, COUNT(*) c FROM jobs GROUP BY queue_state")):
+            s[key] = {r["k"] or "unverified": r["c"] for r in conn.execute(sql)}
+        today = db.now()[:10]
+        row = conn.execute("SELECT COUNT(*) c FROM submissions WHERE submitted_at LIKE ?",
+                           (f"{today}%",)).fetchone()
+        s["submissions_today"] = row["c"]
     return s
 
 
@@ -136,14 +163,20 @@ def stats() -> dict:
 def list_jobs(status: str = "", source: str = "", employment_type: str = "", remote_type: str = "",
               fresher: int = 0, walk_in: int = 0, off_campus: int = 0, batch_year: int = 0,
               search: str = "", min_score: int = 0, deadline_days: int = 0, limit: int = 300,
-              offset: int = 0) -> list[dict]:
+              offset: int = 0, location: str = "", min_salary: float = 0, skills: str = "",
+              max_experience: float = -1, verification_state: str = "", queue_state: str = "") -> list[dict]:
     filters = {k: v for k, v in {"status": status, "source": source,
                                  "employment_type": employment_type,
                                  "remote_type": remote_type, "fresher_flag": fresher or None,
-                                 "walk_in": walk_in or None, "off_campus": off_campus or None}.items() if v}
+                                 "walk_in": walk_in or None, "off_campus": off_campus or None,
+                                 "verification_state": verification_state,
+                                 "queue_state": queue_state}.items() if v}
     rows = db.query_jobs(filters, search=search or "", min_score=min_score or None,
                          batch_year=batch_year or None,
                          deadline_within_days=deadline_days or None,
+                         location=location or "", min_salary=min_salary or None,
+                         skills=skills or "",
+                         max_experience=(None if max_experience < 0 else max_experience),
                          limit=min(limit, 1000), offset=max(offset, 0))
     return [_job_summary(r) for r in rows]
 
@@ -196,23 +229,213 @@ def set_notes(job_id: str, body: NotesBody) -> dict:
 
 @app.post("/api/jobs/{job_id}/verify")
 def verify_job(job_id: str) -> dict:
-    """Re-check the apply URL (HEAD, then GET fallback) and refresh the verification stamp."""
-    import httpx
-    r = _require(job_id)
-    url = r["apply_url"] or r["url"]
-    ok, status = False, ""
+    """Phase 17.4: full verification battery (HTTP + content + domain + freshness)."""
+    from jobagent import verify as verify_engine
+    _require(job_id)
     try:
-        with httpx.Client(follow_redirects=True, timeout=20) as http:
-            resp = http.head(url)
-            if resp.status_code >= 400:      # some sites reject HEAD
-                resp = http.get(url)
-            ok = resp.status_code < 400
-            status = f"HTTP {resp.status_code}"
-    except httpx.HTTPError as e:
-        status = str(e).splitlines()[0][:120]
-    db.update(job_id, verified=1 if ok else 0, last_verified_at=db.now() if ok else None)
-    db.record_event(job_id, "verify", f"Apply URL check: {status}")
-    return {"ok": ok, "status": status}
+        res = verify_engine.verify_job(job_id)
+    except Exception as e:                                   # noqa: BLE001
+        raise HTTPException(502, f"Verification failed: {e}") from e
+    return {"ok": res.state in ("verified_open", "probably_open"),
+            "state": res.state, "note": res.note,
+            "quality_score": res.quality_score,
+            "components": res.components,
+            "final_url": res.final_url,
+            "fraud_flags": res.fraud_flags}
+
+
+@app.post("/api/jobs/{job_id}/mark-applied")
+def mark_applied(job_id: str, body: NotesBody | None = None) -> dict:
+    """The user submitted the form themselves; record honest evidence (Phase 17.6)."""
+    from jobagent import execution
+    _require(job_id)
+    return execution.record_manual_submission(job_id, (body.notes if body else "") or "")
+
+
+# ---------------------------------------------------------------- Phase 17: queue
+
+@app.get("/api/queue")
+def get_queue(limit: int = 100, states: str = "") -> dict:
+    from jobagent import queue as Q
+    state_list = [s for s in states.split(",") if s] or None
+    return {"rows": Q.queue_rows(limit=min(limit, 500), states=state_list),
+            "limits": Q.limits(),
+            "daily_used": Q.daily_submissions()}
+
+
+@app.post("/api/queue/{job_id}/action/{action}")
+def queue_action(job_id: str, action: str) -> dict:
+    from jobagent import queue as Q
+    _require(job_id)
+    try:
+        return Q.run_action(action, job_id)
+    except KeyError as e:
+        raise HTTPException(400, str(e)) from e
+
+
+class ApplyModeBody(BaseModel):
+    mode: str = "assisted"          # assisted | authorized
+    tailor: bool = True
+
+
+@app.post("/api/queue/{job_id}/apply")
+def queue_apply(job_id: str, body: ApplyModeBody) -> dict:
+    """Phase 17.6: launch MODE B (assisted) or MODE C (authorized) execution."""
+    from jobagent import execution
+    _require(job_id)
+    try:
+        if body.mode == "authorized":
+            return execution.mode_c(job_id)
+        if body.mode == "assisted":
+            return execution.mode_b(job_id, tailor_first=body.tailor)
+        raise HTTPException(400, f"Unknown mode '{body.mode}' (assisted|authorized)")
+    except RuntimeError as e:                                  # task spawn conflict
+        raise HTTPException(409, str(e)) from e
+
+
+# ---------------------------------------------------------------- Phase 17: agents
+
+@app.get("/api/agents")
+def list_agents() -> list[dict]:
+    from jobagent import agents
+    return agents.registry()
+
+
+@app.post("/api/agents/{agent}/jobs/{job_id}")
+def run_agent(agent: str, job_id: str, body: NotesBody | None = None) -> dict:
+    from jobagent import agents
+    _require(job_id)
+    try:
+        return agents.run(agent, job_id, question=(body.notes if body else None))
+    except KeyError as e:
+        raise HTTPException(404, str(e)) from e
+    except ValueError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:                                     # noqa: BLE001 - LLMError etc.
+        raise HTTPException(502, f"Agent failed: {e}") from e
+
+
+# ---------------------------------------------------------------- Phase 17: search profiles + sources
+
+@app.get("/api/search-profiles")
+def get_search_profiles() -> dict:
+    from jobagent import search_profiles as SP
+    return {"profiles": SP.profiles(), "active": SP.active(),
+            "quick_views": SP.quick_views()}
+
+
+class ProfileBody(BaseModel):
+    profile: dict[str, Any]
+
+
+@app.put("/api/search-profiles")
+def put_search_profile(body: ProfileBody) -> dict:
+    from jobagent import search_profiles as SP
+    if not body.profile.get("name"):
+        raise HTTPException(400, "Profile needs a name")
+    SP.save(body.profile)
+    return {"ok": True, "profiles": SP.profiles()}
+
+
+@app.post("/api/search-profiles/{name}/apply")
+def apply_search_profile(name: str) -> dict:
+    from jobagent import search_profiles as SP
+    try:
+        return {"ok": True, "profile": SP.apply(name)}
+    except KeyError as e:
+        raise HTTPException(404, str(e)) from e
+
+
+@app.get("/api/sources/external")
+def external_sources() -> list[dict]:
+    """India platforms with no legitimate programmatic access: deep links + honest reasons."""
+    from jobagent.sources import external
+    return external.links_for(cfg("search.keywords", []))
+
+
+@app.get("/api/ats/detect")
+def ats_detect(url: str) -> dict:
+    from jobagent import ats_registry
+    return ats_registry.detect(url)
+
+
+@app.get("/api/ats/platforms")
+def ats_platforms() -> list[dict]:
+    from jobagent import ats_registry
+    return ats_registry.known_platforms()
+
+
+# ---------------------------------------------------------------- Phase 17: email monitoring
+
+@app.get("/api/emails")
+def get_emails(unreviewed: bool = False) -> list[dict]:
+    from jobagent import email_sync
+    rows = db.emails(unreviewed_only=unreviewed)
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["confidence"] = round(r["confidence"] or 0, 2)
+        out.append(d)
+    return out
+
+
+@app.get("/api/emails/status")
+def emails_status() -> dict:
+    from jobagent import email_sync
+    return email_sync.configured()
+
+
+@app.post("/api/emails/sync")
+def emails_sync() -> dict:
+    from jobagent import email_sync
+    try:
+        stats = email_sync.sync()
+        return {"ok": True, **stats}
+    except RuntimeError as e:
+        raise HTTPException(400, str(e)) from e
+    except Exception as e:                                     # noqa: BLE001
+        raise HTTPException(502, f"Email sync failed: {e}") from e
+
+
+class EmailReviewBody(BaseModel):
+    classification: str | None = None
+    job_id: str | None = None
+
+
+@app.post("/api/emails/{email_id}/review")
+def review_email(email_id: int, body: EmailReviewBody) -> dict:
+    db.review_email(email_id, classification=body.classification,
+                    matched_job_id=body.job_id)
+    return {"ok": True}
+
+
+# ---------------------------------------------------------------- Phase 17: task history + backup
+
+@app.get("/api/tasks")
+def task_history(limit: int = 50) -> list[dict]:
+    return [dict(r) for r in db.task_history(limit=min(limit, 200))]
+
+
+@app.post("/api/backup")
+def backup_now() -> dict:
+    """Snapshot the SQLite DB (WAL-safe). Returns the backup path."""
+    import sqlite3
+    from jobagent.config import DATA_DIR
+    from jobagent.db import DB_PATH
+    from datetime import datetime as _dt
+    backups = DATA_DIR / "backups"
+    backups.mkdir(parents=True, exist_ok=True)
+    dest = backups / f"jobs_{_dt.now().strftime('%Y%m%d_%H%M%S')}.db"
+    src = sqlite3.connect(DB_PATH)
+    try:
+        dst = sqlite3.connect(dest)
+        try:
+            src.backup(dst)
+        finally:
+            dst.close()
+    finally:
+        src.close()
+    return {"ok": True, "path": str(dest), "bytes": dest.stat().st_size}
 
 
 @app.get("/api/jobs/{job_id}/resume.pdf")
