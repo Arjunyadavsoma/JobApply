@@ -4,7 +4,8 @@ An AI agent that finds jobs, scores them against your resume, tailors your resum
 for the jobs you pick, and pre-fills application forms in a real browser. **It never submits an
 application: you review every form and click Submit yourself.**
 
-Powered by Claude (via your Claude subscription or the Anthropic API), Playwright, FastAPI and a React dashboard.
+Powered by Claude (via your Claude subscription or the Anthropic API) or Groq (Llama, GPT-OSS, ...),
+Playwright, FastAPI and a React dashboard.
 
 ```
  Search                Score                 Tailor (per job)          Auto-fill (per job)         You
@@ -60,6 +61,7 @@ Powered by Claude (via your Claude subscription or the Anthropic API), Playwrigh
   - a **Claude Pro/Max subscription** with [Claude Code](https://claude.com/claude-code) installed and
     signed in (the CLI bundled with the VS Code extension is detected automatically), or
   - an **Anthropic API key** with credits
+- *or* a **Groq API key** (free tier available) - see [Groq backend](#groq-backend) below
 - Node.js 18+ only if you want to change the dashboard UI (a built copy is included)
 
 ## Setup
@@ -72,8 +74,9 @@ python -m venv .venv
 .venv\Scripts\python -m jobagent init        # creates config.yaml and .env from the examples
 ```
 
-1. **Claude:** leave `llm.backend: subscription` in `config.yaml` to use your Claude subscription, or
-   set `llm.backend: api` and put `ANTHROPIC_API_KEY=...` in `.env`.
+1. **LLM access:** leave `llm.backend: subscription` in `config.yaml` to use your Claude subscription,
+   set `llm.backend: api` with `ANTHROPIC_API_KEY=...` in `.env`, or set `llm.backend: groq` with
+   `GROQ_API_KEY=...` in `.env`.
 2. **Settings:** edit `config.yaml` (or use the dashboard's Settings page later) – keywords,
    locations, companies and the `applicant:` answers used for forms.
 3. **Start the dashboard:** double-click **`Job Agent Dashboard.bat`** (or run
@@ -105,6 +108,30 @@ python -m jobagent apply            # interactive terminal version of auto-fill
 python -m jobagent status
 python -m jobagent web              # dashboard
 ```
+
+### Groq backend
+
+To run the agent on [Groq](https://groq.com) instead of Claude (fast inference, free tier available):
+
+1. Create a key at [console.groq.com/keys](https://console.groq.com/keys) and put it in `.env`:
+   ```
+   GROQ_API_KEY=gsk_...
+   ```
+2. In `config.yaml` (or Settings → AI model in the dashboard) set:
+   ```yaml
+   llm:
+     backend: groq
+     groq_model: openai/gpt-oss-120b   # or openai/gpt-oss-20b, qwen/qwen3.8-27b, ...
+   ```
+
+Notes:
+- `llm.model` is used as-is when it isn't a Claude model, so you can also just set `model: openai/gpt-oss-20b`.
+- Groq has no document attachment, so your resume PDF is sent as extracted text.
+- The Claude `score_effort` / `tailor_effort` / `form_effort` levels map automatically to Groq's
+  `reasoning_effort` (low/medium/high) on the `openai/gpt-oss-*` models, and are ignored on others.
+  You can also pin `llm.reasoning_effort: low|medium|high` explicitly.
+- Answers use Groq's structured-output (JSON schema) mode with an automatic fallback to JSON mode
+  for models that don't support it, so any Groq model works.
 
 ### Instahyre settings
 
@@ -160,7 +187,7 @@ jobagent/
   templates/        resume HTML template
   apply.py          form reading + Claude answers + filling (multi-pass, verified)
   linkedin_apply.py LinkedIn Easy Apply / external-apply flow
-  llm.py            Claude calls (subscription via Claude Code CLI, or Anthropic API) -> Pydantic models
+  llm.py            LLM calls (Claude Code CLI / Anthropic API / Groq API) -> Pydantic models
   server.py         FastAPI backend for the dashboard
   tasks.py          background tasks with live logs
   db.py             SQLite job tracker
@@ -197,5 +224,5 @@ npm run build    # updates web/dist, served by the Python app
 
 ## Tech stack
 
-Python · Claude (Claude Code CLI / Anthropic SDK, structured outputs) · Playwright · FastAPI ·
-SQLite · Jinja2 · React 19 · TypeScript · Tailwind CSS · Vite
+Python · Claude (Claude Code CLI / Anthropic SDK, structured outputs) or Groq (OpenAI-compatible SDK,
+structured outputs) · Playwright · FastAPI · SQLite · Jinja2 · React 19 · TypeScript · Tailwind CSS · Vite

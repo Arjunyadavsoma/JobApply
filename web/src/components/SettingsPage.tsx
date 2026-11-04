@@ -133,18 +133,49 @@ export function SettingsPage() {
         </div>
       </Section>
 
-      <Section title="Claude" hint="Runs on your Claude subscription. Lower effort = faster and uses less of your plan.">
-        <div className="grid gap-4 md:grid-cols-3">
+      <Section title="AI model" hint="Which LLM runs the scoring, tailoring and form filling. API keys live in .env.">
+        <div className="grid gap-4 md:grid-cols-2">
+          <div>
+            <Label hint="subscription = Claude Code CLI login · api = ANTHROPIC_API_KEY · groq = GROQ_API_KEY">Backend</Label>
+            <select className={input} value={String(cfg.llm.backend ?? "subscription")}
+              onChange={(e) => set((c) => { c.llm.backend = e.target.value; })}>
+              <option value="subscription">Claude subscription (Claude Code CLI)</option>
+              <option value="api">Anthropic API key</option>
+              <option value="groq">Groq API key</option>
+            </select>
+          </div>
+          <div>
+            <Label hint={(cfg.llm.backend ?? "subscription") === "groq"
+              ? "any Groq model, e.g. openai/gpt-oss-120b, qwen/qwen3.8-27b"
+              : "e.g. claude-opus-5"}>Model</Label>
+            <input className={input}
+              value={(cfg.llm.backend ?? "subscription") === "groq"
+                ? String(cfg.llm.groq_model
+                    ?? (cfg.llm.model && !String(cfg.llm.model).startsWith("claude")
+                      ? cfg.llm.model : "openai/gpt-oss-120b"))
+                : String(cfg.llm.model ?? "")}
+              placeholder={(cfg.llm.backend ?? "subscription") === "groq" ? "openai/gpt-oss-120b" : "claude-opus-5"}
+              onChange={(e) => set((c) => {
+                if ((c.llm.backend ?? "subscription") === "groq") c.llm.groq_model = e.target.value;
+                else c.llm.model = e.target.value;
+              })} />
+          </div>
+        </div>
+        <div className="mt-5 grid gap-4 md:grid-cols-3">
           {([["score_effort", "Scoring"], ["tailor_effort", "Resume tailoring"], ["form_effort", "Form filling"]] as const).map(([k, label]) => (
             <div key={k}>
               <Label>{label}</Label>
-              <select className={input} value={cfg.llm[k]}
+              <select className={input} value={cfg.llm[k] ?? "medium"}
                 onChange={(e) => set((c) => { c.llm[k] = e.target.value; })}>
                 {EFFORTS.map((x) => <option key={x}>{x}</option>)}
               </select>
             </div>
           ))}
         </div>
+        <p className="mt-2 text-xs text-slate-500">
+          Lower effort = faster and uses less of your Claude plan. On Groq, these map to the
+          model's reasoning effort (gpt-oss models only).
+        </p>
       </Section>
 
       <div className="sticky bottom-4 flex justify-end">

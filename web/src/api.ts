@@ -55,7 +55,15 @@ export interface Config {
     companies: Partial<Record<"portals" | "greenhouse" | "lever" | "ashby" | "workday" | "smartrecruiters" | "workable", string[]>>;
   };
   applicant: Record<string, string>;
-  llm: { score_effort: string; tailor_effort: string; form_effort: string; [k: string]: unknown };
+  llm: {
+    backend?: string;
+    model?: string;
+    groq_model?: string;
+    score_effort: string;
+    tailor_effort: string;
+    form_effort: string;
+    [k: string]: unknown;
+  };
 }
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {

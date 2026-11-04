@@ -80,10 +80,16 @@ sources:
 llm:
   # subscription = use your Claude Pro/Max login via the Claude Code CLI (no API credits needed)
   # api          = use ANTHROPIC_API_KEY from .env (pay-as-you-go API credits)
+  # groq         = use GROQ_API_KEY from .env (Groq's OpenAI-compatible API; gpt-oss & other open models)
   backend: subscription
   # claude_cli: "C:/path/to/claude.exe"   # optional; auto-detected (PATH or the VS Code extension)
   model: claude-opus-5
-  # Effort per task: low | medium | high | xhigh | max
+  # Groq backend (llm.backend: groq):
+  # groq_model: openai/gpt-oss-120b   # or openai/gpt-oss-20b, qwen/qwen3.8-27b, ...
+  # groq_base_url: https://api.groq.com/openai/v1   # override for another OpenAI-compatible provider
+  # reasoning_effort: medium   # only for Groq reasoning models (openai/gpt-oss-*): low | medium | high
+  # Effort per task: low | medium | high | xhigh | max (Claude levels; on Groq these map to
+  # reasoning_effort low/medium/high for the openai/gpt-oss-* models)
   score_effort: low
   tailor_effort: high
   form_effort: medium
