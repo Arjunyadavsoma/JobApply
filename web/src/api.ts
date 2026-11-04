@@ -1,4 +1,6 @@
-export type Status = "new" | "scored" | "tailored" | "applied" | "skipped" | "dismissed" | "error";
+export type Status =
+  | "new" | "scored" | "tailored" | "applied" | "assessment" | "interview" | "offer"
+  | "rejected" | "withdrawn" | "expired" | "skipped" | "dismissed" | "error";
 
 export interface JobSummary {
   id: string;
@@ -8,27 +10,68 @@ export interface JobSummary {
   location: string | null;
   status: Status;
   score: number | null;
-  prefit: number | null; // quick fit estimate (no Claude), for jobs not scored yet
+  prefit: number | null; // quick fit estimate (no AI), for jobs not scored yet
   url: string;
   apply_url: string | null;
   posted_at: string | null;
   discovered_at: string;
   applied_at: string | null;
   has_resume: boolean;
+  // enrichment
+  salary_min: number | null;
+  salary_max: number | null;
+  salary_text: string | null;
+  stipend: number | null;
+  employment_type: string | null;
+  remote_type: string | null;
+  experience_min: number | null;
+  experience_max: number | null;
+  batch_years: number[] | null;
+  deadline: string | null;
+  fresher_flag: number | null;
+  walk_in: number | null;
+  off_campus: number | null;
+  verified: number | null;
+  fraud_flags: string[] | null;
+  notes: string | null;
+  min_cgpa: number | null;
+  min_percentage: number | null;
+}
+
+export interface EligibilityCheck {
+  criterion: string; required: string; candidate: string; result: "pass" | "fail" | "unknown"; note: string;
+}
+
+export interface Eligibility {
+  status: "eligible" | "likely_eligible" | "needs_verification" | "not_eligible";
+  checks: EligibilityCheck[];
+}
+
+export interface JobEvent {
+  id: number; job_id: string; kind: string; text: string | null; created_at: string;
 }
 
 export interface JobDetail extends JobSummary {
   description: string | null;
   error: string | null;
-  match: { score: number; verdict: string; reasons: string[]; missing_requirements: string[] } | null;
+  match: {
+    score: number; verdict: string;
+    skills_score?: number; education_score?: number; experience_score?: number; location_score?: number;
+    reasons: string[]; missing_skills?: string[]; missing_requirements: string[];
+    disqualifiers?: string[]; recommendations?: string[];
+    eligibility?: Eligibility;
+  } | null;
+  eligibility: Eligibility | null;
   changes: string[];
   cover_letter: string | null;
   resume_file: string | null;
+  events: JobEvent[];
 }
 
-export interface Stats extends Record<Status, number> {
+export interface Stats extends Partial<Record<Status, number>> {
   total: number;
   has_resume: boolean;
+  has_profile: boolean;
 }
 
 export interface Task {
@@ -38,6 +81,38 @@ export interface Task {
   running: boolean;
   started: string;
   ended: string | null;
+}
+
+export interface CandidateProfile {
+  full_name: string; email: string; phone: string; current_location: string;
+  linkedin_url: string; github_url: string; portfolio_url: string;
+  graduation_year: number | null; degree: string; branch: string; college: string; university: string;
+  cgpa: number | null; cgpa_scale: number; tenth_percentage: number | null; twelfth_percentage: number | null;
+  diploma_percentage: number | null; active_backlogs: number; previous_backlogs: number;
+  candidate_type: string; total_experience_years: number; work_authorization: string;
+  skills: string[]; preferred_roles: string[]; secondary_roles: string[]; preferred_locations: string[];
+  open_to_relocation: boolean; open_to_remote: boolean;
+  expected_ctc_lpa: number | null; expected_stipend_inr: number | null;
+  notice_period: string; current_ctc_lpa: number | null;
+  extra: Record<string, string>;
+}
+
+export interface Notification {
+  id: number; kind: string; title: string; body: string | null;
+  job_id: string | null; read: number; created_at: string;
+}
+
+export interface Answer { id: number; question: string; answer: string; tags: string | null; updated_at: string; }
+
+export interface Analytics {
+  metrics: Record<string, number>;
+  applications_over_time: { week: string; applications: number }[];
+  status_funnel: Record<string, number>;
+  match_distribution: { bucket: string; jobs: number }[];
+  source_quality: { source: string; jobs: number; avg_score: number | null; applied: number; in_progress: number; response_rate: number }[];
+  missing_skills: { skill: string; jobs: number }[];
+  eligibility: { status: string; jobs: number }[];
+  upcoming_deadlines: { id: string; company: string; title: string; deadline: string; status: string }[];
 }
 
 export interface Config {
@@ -53,12 +128,14 @@ export interface Config {
     linkedin: { enabled: boolean; pages: number };
     naukri: { enabled: boolean; pages: number };
     companies: Partial<Record<"portals" | "greenhouse" | "lever" | "ashby" | "workday" | "smartrecruiters" | "workable", string[]>>;
+    [k: string]: unknown;
   };
   applicant: Record<string, string>;
   llm: {
     backend?: string;
     model?: string;
     groq_model?: string;
+    fallback_model?: string;
     score_effort: string;
     tailor_effort: string;
     form_effort: string;
@@ -90,21 +167,30 @@ const post = <T,>(path: string, body?: unknown) =>
 
 export const api = {
   stats: () => request<Stats>("/api/stats"),
-  jobs: () => request<JobSummary[]>("/api/jobs"),
+  jobs: (params?: Record<string, string | number>) => {
+    const q = new URLSearchParams();
+    for (const [k, v] of Object.entries(params ?? {})) if (v !== "" && v !== 0) q.set(k, String(v));
+    const qs = q.toString();
+    return request<JobSummary[]>(`/api/jobs${qs ? `?${qs}` : ""}`);
+  },
   job: (id: string) => request<JobDetail>(`/api/jobs/${id}`),
-  setStatus: (id: string, status: Status) => post(`/api/jobs/${id}/status`, { status }),
+  setStatus: (id: string, status: Status, note = "") => post(`/api/jobs/${id}/status`, { status, note }),
+  setNotes: (id: string, notes: string) => post(`/api/jobs/${id}/notes`, { notes }),
+  verifyJob: (id: string) => post<{ ok: boolean; status: string }>(`/api/jobs/${id}/verify`),
   scoreOne: (id: string) => post<Task>(`/api/jobs/${id}/score`),
   tailorOne: (id: string) => post<Task>(`/api/jobs/${id}/tailor`),
   applyOne: (id: string, tailor = false) => post<Task>(`/api/jobs/${id}/apply`, { tailor }),
   applyCommand: (command: "fill" | "close") => post("/api/apply/command", { command }),
   openFolder: (id: string) => post(`/api/jobs/${id}/open-folder`),
+  askAnswer: (id: string, question: string, maxChars = 1000) =>
+    post<{ answer: string; used_saved_answer: boolean; grounded: boolean }>(`/api/jobs/${id}/answer`, {
+      question, max_chars: maxChars,
+    }),
+  aiService: (service: "interview_prep" | "follow_up" | "skill_gap" | "quality_check", jobId: string) =>
+    post<Record<string, unknown>>(`/api/ai/${service}?job_id=${encodeURIComponent(jobId)}`),
   search: (body: {
-    keywords: string[];
-    locations: string[];
-    sources: string[];
-    max_age_days: number;
-    score_limit: number;
-    tailor_limit: number;
+    keywords: string[]; locations: string[]; sources: string[]; max_age_days: number;
+    score_limit: number; tailor_limit: number;
   }) => post<Task>("/api/search", body),
   score: (limit: number) => post<Task>("/api/score", { limit }),
   tailor: (limit: number) => post<Task>("/api/tailor", { limit }),
@@ -117,6 +203,25 @@ export const api = {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(patch),
     }),
+  analytics: () => request<Analytics>("/api/analytics"),
+  notifications: (unread = false) => request<Notification[]>(`/api/notifications${unread ? "?unread=true" : ""}`),
+  readNotification: (id: number) => post(`/api/notifications/${id}/read`),
+  readAllNotifications: () => post("/api/notifications/read-all"),
+  profile: () => request<{ profile: CandidateProfile }>("/api/profile"),
+  saveProfile: (patch: Partial<CandidateProfile>) =>
+    request<{ ok: boolean; profile: CandidateProfile }>("/api/profile", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    }),
+  answers: () => request<Answer[]>("/api/answers"),
+  saveAnswer: (question: string, answer: string, tags = "") =>
+    request("/api/answers", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question, answer, tags }),
+    }),
+  deleteAnswer: (id: number) => request(`/api/answers/${id}`, { method: "DELETE" }),
   resume: () =>
     request<{ resume: Record<string, any> | null; has_preview?: boolean; has_original?: boolean }>("/api/resume"),
   uploadResume: (file: File) => {
@@ -130,9 +235,37 @@ export const api = {
 export const STATUS_META: Record<Status, { label: string; cls: string }> = {
   new: { label: "Not scored", cls: "bg-slate-100 text-slate-600" },
   scored: { label: "Good match", cls: "bg-blue-100 text-blue-700" },
-  tailored: { label: "Resume ready", cls: "bg-indigo-100 text-indigo-700" },
+  tailored: { label: "Ready to apply", cls: "bg-indigo-100 text-indigo-700" },
   applied: { label: "Applied", cls: "bg-emerald-100 text-emerald-700" },
+  assessment: { label: "Assessment", cls: "bg-amber-100 text-amber-700" },
+  interview: { label: "Interview", cls: "bg-violet-100 text-violet-700" },
+  offer: { label: "Offer", cls: "bg-green-100 text-green-800" },
+  rejected: { label: "Rejected", cls: "bg-red-100 text-red-700" },
+  withdrawn: { label: "Withdrawn", cls: "bg-slate-100 text-slate-500" },
+  expired: { label: "Expired", cls: "bg-orange-100 text-orange-700" },
   skipped: { label: "Low match", cls: "bg-slate-100 text-slate-500" },
   dismissed: { label: "Dismissed", cls: "bg-slate-100 text-slate-400" },
   error: { label: "Error", cls: "bg-red-100 text-red-700" },
+};
+
+export const ELIGIBILITY_META: Record<string, { label: string; cls: string }> = {
+  eligible: { label: "Eligible", cls: "bg-emerald-100 text-emerald-700" },
+  likely_eligible: { label: "Likely eligible", cls: "bg-lime-100 text-lime-700" },
+  needs_verification: { label: "Needs verification", cls: "bg-amber-100 text-amber-700" },
+  not_eligible: { label: "Not eligible", cls: "bg-red-100 text-red-700" },
+};
+
+export function salaryLabel(j: JobSummary): string {
+  if (j.stipend) return `₹${j.stipend.toLocaleString("en-IN")}/mo`;
+  if (j.salary_min != null && j.salary_max != null)
+    return j.salary_min === j.salary_max ? `₹${j.salary_min} LPA` : `₹${j.salary_min}-${j.salary_max} LPA`;
+  return "";
+}
+
+export const SOURCE_LABEL: Record<string, string> = {
+  greenhouse: "Career site", lever: "Career site", ashby: "Career site", workday: "Career site",
+  smartrecruiters: "Career site", workable: "Career site", amazon: "Career site", google: "Career site",
+  apple: "Career site", eightfold: "Career site", oracle: "Career site", mynexthire: "Career site",
+  portal: "Career site", linkedin: "LinkedIn", naukri: "Naukri", instahyre: "Instahyre",
+  remotive: "Remotive", arbeitnow: "Arbeitnow", successfactors: "Career site",
 };

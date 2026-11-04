@@ -1,12 +1,12 @@
 import { useEffect, useState } from "react";
 import {
-  Check, CircleAlert, Download, ExternalLink, FileText, FolderOpen, Mail, MapPin, MousePointerClick, Sparkles,
-  Undo2, WandSparkles, X,
+  Check, CircleAlert, Download, ExternalLink, FileText, FolderOpen, History, Mail, MapPin,
+  MousePointerClick, ShieldCheck, Sparkles, Undo2, WandSparkles, X,
 } from "lucide-react";
-import { api, STATUS_META, type JobDetail, type Task } from "../api";
+import { api, ELIGIBILITY_META, salaryLabel, STATUS_META, type JobDetail, type Status, type Task } from "../api";
 import { Button, ScoreBadge, useAction } from "./ui";
 
-type Tab = "match" | "resume" | "cover" | "jd";
+type Tab = "match" | "resume" | "cover" | "jd" | "activity";
 
 export function JobDrawer({ jobId, task, version, onClose, onChanged }: {
   jobId: string; task: Task | null; version: number; onClose: () => void; onChanged: () => void;
@@ -35,6 +35,7 @@ export function JobDrawer({ jobId, task, version, onClose, onChanged }: {
     { id: "resume", label: "Tailored resume", icon: <FileText className="size-4" /> },
     { id: "cover", label: "Cover letter", icon: <Mail className="size-4" /> },
     { id: "jd", label: "Job description", icon: <FileText className="size-4" /> },
+    { id: "activity", label: "Activity", icon: <History className="size-4" /> },
   ];
 
   return (
@@ -95,11 +96,24 @@ export function JobDrawer({ jobId, task, version, onClose, onChanged }: {
                   onClick={() => act("apply", () => api.applyOne(job.id), "Opening the application in Chrome...")}>
                   {job.has_resume ? "Auto-fill application" : "Auto-fill (original resume)"}
                 </Button>
-                {job.status !== "applied" && (
+                {job.status !== "applied" && !["assessment", "interview", "offer", "rejected", "withdrawn"].includes(job.status) && (
                   <Button icon={<Check className="size-4" />} loading={busy === "applied"}
                     onClick={() => act("applied", () => api.setStatus(job.id, "applied"), "Marked as applied")}>
                     Mark applied
                   </Button>
+                )}
+                {["applied", "assessment", "interview"].includes(job.status) && (
+                  <select
+                    value={job.status}
+                    disabled={busy?.startsWith("status")}
+                    onChange={(e) => act("status-" + e.target.value, () => api.setStatus(job.id, e.target.value as Status), "Status updated")}
+                    className="rounded-lg border border-slate-300 bg-white px-2.5 py-2 text-sm font-medium text-slate-700"
+                    title="Move through the pipeline"
+                  >
+                    {(["applied", "assessment", "interview", "offer", "rejected", "withdrawn"] as Status[])
+                      .filter((s) => job.status === "applied" || s !== "applied")
+                      .map((s) => <option key={s} value={s}>{STATUS_META[s].label}</option>)}
+                  </select>
                 )}
                 {["skipped", "dismissed", "error", "applied"].includes(job.status) ? (
                   <Button icon={<Undo2 className="size-4" />} loading={busy === "restore"}
@@ -138,6 +152,16 @@ export function JobDrawer({ jobId, task, version, onClose, onChanged }: {
                   </div>
                 </div>
               )}
+              {/* Fraud / trust warnings block auto-apply; always visible here */}
+              {(job.fraud_flags ?? []).length > 0 && (
+                <div className="mt-3 rounded-lg border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900">
+                  <div className="flex items-center gap-1.5 font-semibold"><CircleAlert className="size-4" /> Check before applying</div>
+                  <ul className="mt-1 list-disc space-y-0.5 pl-5">
+                    {(job.fraud_flags ?? []).map((f) => <li key={f}>{f}</li>)}
+                  </ul>
+                </div>
+              )}
+
               {job.status === "error" && job.error && (
                 <div className="mt-3 flex items-start gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700">
                   <CircleAlert className="mt-0.5 size-4 shrink-0" /> {job.error}
@@ -159,22 +183,100 @@ export function JobDrawer({ jobId, task, version, onClose, onChanged }: {
 
             <div className="flex-1 overflow-auto px-6 py-5">
               {tab === "match" && (
-                job.match ? (
-                  <div className="grid gap-6 md:grid-cols-2">
-                    <div>
-                      <h3 className="mb-2 font-semibold text-emerald-700">Why it fits</h3>
-                      <ul className="list-disc space-y-1.5 pl-5 text-sm">{job.match.reasons.map((r) => <li key={r}>{r}</li>)}</ul>
+                <div className="space-y-6">
+                  {/* Deterministic eligibility */}
+                  {job.eligibility && (
+                    <div className="rounded-xl border border-slate-200 p-4">
+                      <div className="mb-3 flex items-center gap-2">
+                        <ShieldCheck className="size-4 text-slate-500" />
+                        <h3 className="text-sm font-semibold text-slate-800">Eligibility check</h3>
+                        <span className={`rounded-full px-2.5 py-0.5 text-xs font-medium ${ELIGIBILITY_META[job.eligibility.status].cls}`}>
+                          {ELIGIBILITY_META[job.eligibility.status].label}
+                        </span>
+                        <span className="text-xs text-slate-400">deterministic - the AI cannot override this</span>
+                      </div>
+                      {job.eligibility.checks.length ? (
+                        <table className="w-full text-sm">
+                          <tbody>
+                            {job.eligibility.checks.map((c) => (
+                              <tr key={c.criterion + c.required} className="border-t border-slate-100 first:border-0">
+                                <td className="w-28 py-1.5 pr-2 align-top text-xs font-medium uppercase tracking-wide text-slate-500">{c.criterion}</td>
+                                <td className="py-1.5 pr-2 align-top text-slate-700">needs {c.required}</td>
+                                <td className="py-1.5 pr-2 align-top text-slate-500">you: {c.candidate}</td>
+                                <td className="w-16 py-1.5 align-top">
+                                  <span className={`text-xs font-semibold ${
+                                    c.result === "pass" ? "text-emerald-600" : c.result === "fail" ? "text-red-600" : "text-amber-600"
+                                  }`}>{c.result === "pass" ? "✓ pass" : c.result === "fail" ? "✗ fail" : "? unknown"}</span>
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      ) : (
+                        <p className="text-sm text-slate-500">No explicit eligibility criteria found in the posting.</p>
+                      )}
                     </div>
-                    <div>
-                      <h3 className="mb-2 font-semibold text-amber-700">Gaps</h3>
-                      {job.match.missing_requirements.length ? (
-                        <ul className="list-disc space-y-1.5 pl-5 text-sm">
-                          {job.match.missing_requirements.map((r) => <li key={r}>{r}</li>)}
-                        </ul>
-                      ) : <p className="text-sm text-slate-500">None noted.</p>}
+                  )}
+
+                  {job.match ? (
+                    <div className="grid gap-6 md:grid-cols-2">
+                      <div>
+                        <h3 className="mb-2 font-semibold text-emerald-700">Why it fits</h3>
+                        <ul className="list-disc space-y-1.5 pl-5 text-sm">{job.match.reasons.map((r) => <li key={r}>{r}</li>)}</ul>
+                        {(job.match.recommendations ?? []).length > 0 && (
+                          <>
+                            <h3 className="mb-2 mt-4 font-semibold text-blue-700">Recommendations</h3>
+                            <ul className="list-disc space-y-1.5 pl-5 text-sm">{job.match.recommendations!.map((r) => <li key={r}>{r}</li>)}</ul>
+                          </>
+                        )}
+                      </div>
+                      <div>
+                        <h3 className="mb-2 font-semibold text-amber-700">Gaps</h3>
+                        {(job.match.missing_requirements ?? []).length || (job.match.missing_skills ?? []).length ? (
+                          <ul className="list-disc space-y-1.5 pl-5 text-sm">
+                            {(job.match.missing_requirements ?? []).map((r) => <li key={r}>{r}</li>)}
+                            {(job.match.missing_skills ?? []).map((r) => <li key={r}>{r}</li>)}
+                          </ul>
+                        ) : <p className="text-sm text-slate-500">None noted.</p>}
+                        {(job.match.disqualifiers ?? []).length > 0 && (
+                          <div className="mt-3 rounded-lg bg-red-50 p-3 text-sm text-red-700">
+                            <b>Disqualifiers:</b> {(job.match.disqualifiers ?? []).join("; ")}
+                          </div>
+                        )}
+                      </div>
+                      {job.match.skills_score !== undefined && (
+                        <div className="md:col-span-2 grid grid-cols-2 gap-3 md:grid-cols-4">
+                          {["skills_score", "education_score", "experience_score", "location_score"].map((k) => {
+                            const v = (job.match as unknown as Record<string, number | undefined>)[k];
+                            if (v === undefined) return null;
+                            const labels: Record<string, string> = { skills_score: "Skills", education_score: "Education", experience_score: "Experience", location_score: "Location" };
+                            return (
+                              <div key={k} className="rounded-lg border border-slate-200 p-3 text-center">
+                                <div className="text-2xl font-bold text-slate-800">{v}</div>
+                                <div className="text-xs text-slate-500">{labels[k]}</div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      )}
                     </div>
-                  </div>
-                ) : <p className="text-sm text-slate-500">Not scored yet - press <b>Score this job</b>.</p>
+                  ) : <p className="text-sm text-slate-500">Not scored yet - press <b>Score this job</b>.</p>}
+
+                  {/* Enriched facts */}
+                  {(job.salary_min || job.stipend || job.batch_years?.length || job.deadline || job.min_cgpa) && (
+                    <div className="flex flex-wrap gap-2 text-sm">
+                      {salaryLabel(job) && <span className="rounded bg-emerald-50 px-2.5 py-1 font-medium text-emerald-700">CTC {salaryLabel(job)}</span>}
+                      {job.deadline && <span className="rounded bg-red-50 px-2.5 py-1 font-medium text-red-700">Deadline {job.deadline}</span>}
+                      {job.batch_years?.length ? <span className="rounded bg-blue-50 px-2.5 py-1 font-medium text-blue-700">Batches {job.batch_years.join(", ")}</span> : null}
+                      {job.min_cgpa && <span className="rounded bg-slate-100 px-2.5 py-1 font-medium text-slate-600">Min CGPA {job.min_cgpa}</span>}
+                      {job.experience_min !== null && job.experience_min !== undefined && (
+                        <span className="rounded bg-slate-100 px-2.5 py-1 font-medium text-slate-600">
+                          Exp {job.experience_min}{job.experience_max ? `-${job.experience_max}` : "+"} yrs
+                        </span>
+                      )}
+                    </div>
+                  )}
+                </div>
               )}
 
               {tab === "resume" && (
@@ -239,10 +341,57 @@ export function JobDrawer({ jobId, task, version, onClose, onChanged }: {
               {tab === "jd" && (
                 <div className="whitespace-pre-wrap text-sm leading-relaxed text-slate-700">{job.description}</div>
               )}
+
+              {tab === "activity" && (
+                <div className="space-y-4">
+                  <NotesEditor job={job} onSaved={onChanged} />
+                  <div>
+                    <h3 className="mb-3 text-sm font-semibold text-slate-800">Timeline</h3>
+                    <div className="space-y-0">
+                      {job.events.map((e) => (
+                        <div key={e.id} className="flex gap-3">
+                          <div className="flex flex-col items-center">
+                            <span className={`mt-1.5 size-2.5 shrink-0 rounded-full ${
+                              e.kind === "status" ? "bg-blue-500" : e.kind === "error" ? "bg-red-500" :
+                              e.kind === "apply" ? "bg-emerald-500" : "bg-slate-300"
+                            }`} />
+                            <span className="w-px flex-1 bg-slate-200" />
+                          </div>
+                          <div className="pb-5">
+                            <div className="text-sm text-slate-800">{e.text || e.kind}</div>
+                            <div className="text-xs text-slate-400">{e.created_at.replace("T", " ").slice(0, 16)}</div>
+                          </div>
+                        </div>
+                      ))}
+                      {job.events.length === 0 && <p className="text-sm text-slate-500">No activity recorded yet.</p>}
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           </>
         )}
       </aside>
+    </div>
+  );
+}
+
+function NotesEditor({ job, onSaved }: { job: JobDetail; onSaved: () => void }) {
+  const [notes, setNotes] = useState(job.notes ?? "");
+  const { busy, run } = useAction();
+  useEffect(() => setNotes(job.notes ?? ""), [job.id]);
+  return (
+    <div>
+      <h3 className="mb-2 text-sm font-semibold text-slate-800">Notes</h3>
+      <textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={3}
+        placeholder="Recruiter contact, referral, interview date, follow-up reminders…"
+        className="w-full rounded-lg border border-slate-300 p-3 text-sm focus:border-blue-500 focus:ring-2 focus:ring-blue-100" />
+      <div className="mt-2 flex justify-end">
+        <Button variant="primary" disabled={notes === (job.notes ?? "")} loading={busy === "notes"}
+          onClick={() => run("notes", async () => { await api.setNotes(job.id, notes); onSaved(); }, "Notes saved")}>
+          Save notes
+        </Button>
+      </div>
     </div>
   );
 }

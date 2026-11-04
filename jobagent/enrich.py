@@ -40,7 +40,7 @@ def parse_salary(text: str) -> tuple[float | None, float | None, str, int | None
     raw = ""
 
     # Range first: "₹3 - ₹5 LPA", "3-5 LPA", "3 to 5 LPA CTC", "Rs. 4.5 - 6 Lakh per annum"
-    m = re.search(rf"{RUPEE_OPT}{NUM}\s*(?:-|–|to)\s*{RUPEE_OPT}{NUM}\s*(?:lpa|lakh|\u20b9l|l)\b\.?(?:\s*(?:pa|p\.a\.|per annum|ctc))?",
+    m = re.search(rf"{RUPEE_OPT}{NUM}\s*(?:-|–|to)\s*{RUPEE_OPT}{NUM}\s*(?:lpa|lakhs?|lacs?|l)\b\.?(?:\s*(?:pa|p\.a\.|per annum|ctc))?",
                   t, re.IGNORECASE)
     if m:
         low, high = float(m.group(1)), float(m.group(2))
@@ -246,7 +246,8 @@ def detect_fraud(apply_url: str, company: str, text: str) -> list[str]:
         host = (m.group(1) if m else "").lower()
     except re.error:
         host = ""
-    if host and any(host.endswith(f".{d}") or host == d for d in FREE_MAIL):
+    if host and any(host == d or host.endswith("." + d) or host.endswith("@" + d)
+                     or host.split("@")[-1] == d for d in FREE_MAIL):
         flags.append("apply link points to a free email-style domain")
     if company and host:
         # Company name totally absent from the apply host AND host not a known ATS/board?

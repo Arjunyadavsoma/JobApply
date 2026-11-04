@@ -1,15 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Briefcase, CircleAlert, FileText, Loader2, Search, Settings } from "lucide-react";
+import {
+  BarChart3, Briefcase, Brain, CircleAlert, FileText, KanbanSquare, Search, Settings, User,
+} from "lucide-react";
 import { api, type Config, type JobSummary, type Stats, type Task } from "./api";
+import { AnalyticsPage } from "./components/AnalyticsPage";
+import { ApplicationsPage } from "./components/ApplicationsPage";
+import { AssistantPage } from "./components/AssistantPage";
 import { JobDrawer } from "./components/JobDrawer";
 import { JobsTable } from "./components/JobsTable";
+import { NotificationsBell } from "./components/NotificationsBell";
+import { ProfilePage } from "./components/ProfilePage";
 import { ResumePage } from "./components/ResumePage";
 import { SearchPanel } from "./components/SearchPanel";
 import { SettingsPage } from "./components/SettingsPage";
 import { TaskPanel } from "./components/TaskPanel";
 import { Card, ToastProvider } from "./components/ui";
 
-type Page = "jobs" | "resume" | "settings";
+type Page = "jobs" | "applications" | "analytics" | "assistant" | "resume" | "profile" | "settings";
 
 function StatCard({ label, value, tone }: { label: string; value: number; tone: string }) {
   return (
@@ -34,7 +41,7 @@ export default function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [s, j] = await Promise.all([api.stats(), api.jobs()]);
+      const [s, j] = await Promise.all([api.stats(), api.jobs({ limit: 500 })]);
       setStats(s);
       setJobs(j);
       setVersion((v) => v + 1);
@@ -81,24 +88,30 @@ export default function App() {
     pollTask();
   };
   const running = !!task?.running;
+  const appliedTotal = (stats?.applied ?? 0) + (stats?.assessment ?? 0) + (stats?.interview ?? 0)
+    + (stats?.offer ?? 0) + (stats?.rejected ?? 0) + (stats?.withdrawn ?? 0);
 
   const NAV: { id: Page; label: string; icon: React.ReactNode }[] = [
-    { id: "jobs", label: "Search & jobs", icon: <Search className="size-4" /> },
-    { id: "resume", label: "My resume", icon: <FileText className="size-4" /> },
+    { id: "jobs", label: "Jobs", icon: <Search className="size-4" /> },
+    { id: "applications", label: "Applications", icon: <KanbanSquare className="size-4" /> },
+    { id: "analytics", label: "Analytics", icon: <BarChart3 className="size-4" /> },
+    { id: "assistant", label: "AI Assistant", icon: <Brain className="size-4" /> },
+    { id: "resume", label: "Resume Studio", icon: <FileText className="size-4" /> },
+    { id: "profile", label: "My Profile", icon: <User className="size-4" /> },
     { id: "settings", label: "Settings", icon: <Settings className="size-4" /> },
   ];
 
   return (
     <ToastProvider>
       <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center gap-6 px-6 py-3">
+        <div className="mx-auto flex max-w-[1600px] items-center gap-5 px-6 py-3">
           <div className="flex items-center gap-2 font-semibold">
             <span className="flex size-8 items-center justify-center rounded-lg bg-blue-600 text-white">
               <Briefcase className="size-4" />
             </span>
-            Job Agent
+            JobApply
           </div>
-          <nav className="flex gap-1">
+          <nav className="flex flex-wrap gap-1">
             {NAV.map((n) => (
               <button key={n.id} onClick={() => setPage(n.id)}
                 className={`inline-flex items-center gap-2 rounded-lg px-3 py-1.5 text-sm font-medium ${
@@ -108,35 +121,48 @@ export default function App() {
               </button>
             ))}
           </nav>
-          {running && (
-            <div className="ml-auto inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-sm text-blue-700">
-              <Loader2 className="size-4 animate-spin" /> {task!.label}
-            </div>
-          )}
+          <div className="ml-auto flex items-center gap-3">
+            {running && (
+              <div className="inline-flex items-center gap-2 rounded-full bg-blue-50 px-3 py-1 text-sm text-blue-700">
+                <span className="size-3.5 animate-spin rounded-full border-2 border-blue-300 border-t-blue-600" />
+                {task!.label}
+              </div>
+            )}
+            <NotificationsBell />
+          </div>
         </div>
       </header>
 
-      <main className="mx-auto max-w-7xl space-y-5 px-6 py-6">
+      <main className="mx-auto max-w-[1600px] space-y-5 px-6 py-6">
         {offline && (
           <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-            <CircleAlert className="size-4" /> Can't reach the agent. Is the "Job Agent Dashboard" window still open?
+            <CircleAlert className="size-4" /> Can't reach the agent. Is the dashboard server still running?
           </div>
         )}
         {stats && !stats.has_resume && page !== "resume" && (
           <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
             <CircleAlert className="size-4" /> Upload your resume on the
-            <button className="font-medium underline" onClick={() => setPage("resume")}>My resume</button> page first.
+            <button className="font-medium underline" onClick={() => setPage("resume")}>Resume Studio</button> page first.
+          </div>
+        )}
+        {stats && !stats.has_profile && !["profile", "resume"].includes(page) && (
+          <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 p-3 text-sm text-blue-800">
+            <CircleAlert className="size-4" /> Complete your
+            <button className="font-medium underline" onClick={() => setPage("profile")}>candidate profile</button>
+            so batch/CGPA eligibility checks work.
           </div>
         )}
 
         {page === "jobs" && (
           <>
-            <div className="grid grid-cols-2 gap-3 md:grid-cols-6">
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4 lg:grid-cols-8">
               <StatCard label="Jobs found" value={stats?.total ?? 0} tone="text-slate-900" />
               <StatCard label="Not scored" value={stats?.new ?? 0} tone="text-slate-600" />
               <StatCard label="Good matches" value={(stats?.scored ?? 0) + (stats?.tailored ?? 0)} tone="text-blue-700" />
-              <StatCard label="Resumes ready" value={stats?.tailored ?? 0} tone="text-indigo-700" />
-              <StatCard label="Applied" value={stats?.applied ?? 0} tone="text-emerald-700" />
+              <StatCard label="Ready to apply" value={stats?.tailored ?? 0} tone="text-indigo-700" />
+              <StatCard label="Applied" value={appliedTotal} tone="text-emerald-700" />
+              <StatCard label="In progress" value={(stats?.assessment ?? 0) + (stats?.interview ?? 0)} tone="text-violet-700" />
+              <StatCard label="Offers" value={stats?.offer ?? 0} tone="text-green-700" />
               <StatCard label="Low match" value={stats?.skipped ?? 0} tone="text-slate-400" />
             </div>
             <SearchPanel config={config} running={running} onStarted={onStarted} />
@@ -145,12 +171,16 @@ export default function App() {
               onStarted={onStarted} />
           </>
         )}
+        {page === "applications" && <ApplicationsPage onChanged={refresh} />}
+        {page === "analytics" && <AnalyticsPage />}
+        {page === "assistant" && <AssistantPage />}
         {page === "resume" && (
           <>
             {running && task?.args[0] === "parse-resume" && <TaskPanel task={task} log={log} />}
             <ResumePage running={running} version={version} onStarted={onStarted} />
           </>
         )}
+        {page === "profile" && <ProfilePage />}
         {page === "settings" && <SettingsPage />}
       </main>
 

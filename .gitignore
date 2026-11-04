@@ -9,4 +9,3 @@ __pycache__/
 *.pyc
 web/node_modules/
 .browser_profile_chrome/
-.github/

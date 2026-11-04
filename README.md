@@ -1,228 +1,201 @@
-# Job Application Agent
+# JobApply — India-first AI job application platform
 
-An AI agent that finds jobs, scores them against your resume, tailors your resume and cover letter
-for the jobs you pick, and pre-fills application forms in a real browser. **It never submits an
-application: you review every form and click Submit yourself.**
+An AI agent that finds jobs, checks your eligibility, scores fit, tailors your resume and cover
+letter, pre-fills application forms in a real browser, and tracks every application through your
+pipeline. **It never submits an application: you review every form and click Submit yourself.**
 
-Powered by Claude (via your Claude subscription or the Anthropic API) or Groq (Llama, GPT-OSS, ...),
-Playwright, FastAPI and a React dashboard.
+Powered by **Groq** (primary AI provider; Claude subscription/API also supported), Playwright,
+FastAPI and a React dashboard. Built for the Indian job market — B.Tech freshers, 2026-2028
+batches, internships, off-campus drives, MNC career pages — and international remote roles.
 
 ```
- Search                Score                 Tailor (per job)          Auto-fill (per job)         You
- career sites   ──►   Claude rates   ──►    resume + cover letter ──► opens the form in    ──►   review &
- LinkedIn,Naukri,      each job 0-100        in your resume's layout    Chrome and fills it        Submit
+ Discover                 Enrich                    Match                      Apply (per job)                You
+ career sites      ──►   salary / batch /     ──►   deterministic        ──►   tailored resume +      ──►   review &
+ LinkedIn,Naukri,        CGPA / deadlines /         eligibility + AI             form auto-fill in             Submit
+ Instahyre,Remotive,     fraud flags                score with reasons            Chrome
+ India MNC registry
 ```
 
-## Features
+## What it does
 
-- **Job discovery**
-  - **Company career portals directly** – paste any company's careers URL and the agent searches that
-    company's own site with your keywords. It detects the site type automatically:
-    - Amazon, Google, Apple, Microsoft & Qualcomm (Eightfold), JPMorgan (Oracle Recruiting), Swiggy (MyNextHire)
-    - careers pages that embed a Greenhouse, Lever, Ashby, Workday, SmartRecruiters or Workable board
-      (e.g. Razorpay → Greenhouse, PhonePe → SmartRecruiters)
-    - any other careers site: searched in a hidden browser, with Claude picking the relevant job links
-  - Plus the public job feeds of Greenhouse, Lever, Ashby, Workday, SmartRecruiters and Workable boards
-  - LinkedIn public job search, Naukri search and Instahyre (skills-based search via its public job API)
-  - Location filter: e.g. *India + remote jobs open to India* (drops "US - Remote" and the like)
-  - Title filters, de-duplication across sources, India/remote-first ordering
-- **Match scoring** – Claude rates each job against your resume with reasons and gaps, so you spend time on real fits
-- **Resume tailoring on demand** – one click per job:
-  - Reorders and rephrases your experience in the job's terminology and rewrites the headline/summary
-  - Optionally adds job-relevant skills to the Skills section, always listed for you to review
-  - Never changes employers, titles, dates, degrees or metrics
-  - Renders in the same layout as your own resume, fitted to one page, plus a cover letter
-- **Form auto-fill**
-  - Reads every field, including custom dropdowns, radio groups and file uploads
-  - Answers from your resume and a small facts file (notice period, CTC, work authorization, ...)
-  - Uploads the resume first so the site can prefill; makes multiple passes for fields that appear
-    later; checks every value stuck
-  - Anything it can't answer truthfully, plus legal consents, is outlined in red for you
-  - Greenhouse, Lever, Ashby and most company forms
-  - LinkedIn Easy Apply (fills each step, clicks Next, stops at Submit) and "apply on company site"
-- **Dashboard** – search with your settings, live progress log, results table, job details with the
-  tailored PDF, and buttons for every action. No terminal needed.
+- **India-first job discovery**
+  - Company career portals: paste any careers URL — Amazon, Google, Apple, Microsoft/Qualcomm
+    (Eightfold), JPMorgan (Oracle), Swiggy (MyNextHire), SuccessFactors, or any embedded
+    Greenhouse/Lever/Ashby/Workday/SmartRecruiters/Workable board
+  - **India MNC registry** seeded automatically (Microsoft, Amazon, Google, Oracle, NVIDIA, Adobe,
+    Salesforce, ServiceNow, Accenture, Deloitte, PwC, EY, KPMG, Freshworks, Zoho, Razorpay, PhonePe,
+    Swiggy, Flipkart, CRED, …)
+  - LinkedIn public search, Naukri, Instahyre, **Remotive** and **Arbeitnow** (public APIs)
+  - Location filter: India + remote-open-to-India; title filters; cross-source de-duplication
+- **Deterministic enrichment (no AI, fully explainable)** — every job gets structured facts:
+  salary (LPA / monthly stipend, never confused with take-home), experience range, employment
+  type, remote/hybrid/onsite, eligible graduation batches, CGPA/percentage cutoffs, backlog
+  policy, application deadline, fresher/walk-in/off-campus flags, and fraud warnings
+  (registration fees, free-mail apply links, "guaranteed job" wording)
+- **Eligibility engine** — batch, CGPA, percentage, experience and backlogs checked against your
+  profile: *eligible / likely eligible / needs verification / not eligible*, with the exact
+  requirement shown for every check. Unclear criteria never auto-reject, and the AI cannot
+  override deterministic checks.
+- **Explainable matching** — AI score with skills/education/experience/location dimensions,
+  reasons, missing skills, disqualifiers and recommendations
+- **Resume tailoring on demand** — reorders and rephrases your experience in the job's
+  terminology, one-page PDF in your own layout, cover letter, never invents facts; added skills
+  are always listed for review
+- **Form auto-fill** — reads every field including custom dropdowns, radio groups and uploads;
+  answers from your profile + resume; India-specific fields (10th/12th marks, CGPA, graduation
+  year, notice period, CTC, relocation); anything unanswerable or legal is outlined red for you
+- **Application CRM** — discovered → matched → ready → submitted → assessment → interview →
+  offer, with a per-job timeline, notes, duplicate-application guard and deadline tracking
+- **Analytics** — applications per week, score distribution, eligibility breakdown, missing
+  skills, source quality: all from your own data, nothing fabricated
+- **AI assistant** — interview prep, recruiter follow-up emails, skill-gap reports with learning
+  plans, application quality checks, and a verified answer knowledge base that always wins over
+  AI-generated answers
+- **Security** — keys only in `.env`, job text treated as untrusted data (prompt-injection
+  defence), upload validation, optional dashboard token, fraud guard blocks auto-fill on
+  suspicious postings
 
 ## Screens
 
 | Page | What you do there |
 |---|---|
-| **Search & jobs** | Set keywords, locations and sources, press **Search**, and watch the live log. Results land in tabs: Matches, Applied, Not scored yet, Low match, All. |
-| **Job details** (click a row) | Match reasons and gaps, and buttons: **Tailor resume**, **Tailor & auto-fill**, **Auto-fill application**, **Mark applied**, **Dismiss**. Also the tailored resume PDF with a list of changes and added skills, the cover letter and the job description. |
-| **My resume** | Upload your resume PDF; see your original next to the tailoring template. |
-| **Settings** | Minimum match score, skipped titles, company lists, form answers, Claude effort levels. |
+| **Jobs** | Search with your settings; India quick views (Fresher, 2027 batch, Internships, Hyderabad, Remote, Deadlines); live log; results with salary/batch/deadline facts |
+| **Job details** (click a row) | Eligibility table, match dimensions and reasons, **Tailor resume**, **Auto-fill application**, pipeline status, notes, fraud warnings, timeline |
+| **Applications** | CRM pipeline: ready → submitted → assessment → interview → offer, one-click transitions |
+| **Analytics** | Weekly applications, score and eligibility distributions, source quality, missing skills, upcoming deadlines |
+| **AI Assistant** | Interview prep / follow-up / skill gap / quality check per job + answer knowledge base editor |
+| **Resume Studio** | Upload your resume PDF; original next to the tailoring template |
+| **My Profile** | Structured candidate profile (graduation year, CGPA, 10th/12th, backlogs, preferences) that powers eligibility and form answers |
+| **Settings** | Sources, keywords, companies, minimum match score, AI model and effort levels |
 
 ## Requirements
 
-- Windows 10/11 (macOS/Linux work too, but the launcher is a `.bat`)
-- Python 3.11+
-- Google Chrome (or Microsoft Edge)
-- Claude access, one of:
-  - a **Claude Pro/Max subscription** with [Claude Code](https://claude.com/claude-code) installed and
-    signed in (the CLI bundled with the VS Code extension is detected automatically), or
-  - an **Anthropic API key** with credits
-- *or* a **Groq API key** (free tier available) - see [Groq backend](#groq-backend) below
-- Node.js 18+ only if you want to change the dashboard UI (a built copy is included)
+- Python 3.11+ (Linux, macOS or Windows)
+- Google Chrome or Microsoft Edge (only needed for apply / Naukri search)
+- A **Groq API key** (free tier available) — recommended; or Claude access
+  (subscription or Anthropic API key)
+- Node.js 22+ only if you change the dashboard (a built copy is included)
 
 ## Setup
 
-```powershell
-git clone https://github.com/VedantSagare/job-application-agent.git
-cd job-application-agent
-python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt
-.venv\Scripts\python -m jobagent init        # creates config.yaml and .env from the examples
+```bash
+git clone https://github.com/Arjunyadavsoma/JobApply.git
+cd JobApply
+python -m venv .venv && .venv/bin/pip install -r requirements.txt   # Windows: .venv\Scripts\pip
+python -m jobagent init        # creates config.yaml and .env from the examples
 ```
 
-1. **LLM access:** leave `llm.backend: subscription` in `config.yaml` to use your Claude subscription,
-   set `llm.backend: api` with `ANTHROPIC_API_KEY=...` in `.env`, or set `llm.backend: groq` with
-   `GROQ_API_KEY=...` in `.env`.
-2. **Settings:** edit `config.yaml` (or use the dashboard's Settings page later) – keywords,
-   locations, companies and the `applicant:` answers used for forms.
-3. **Start the dashboard:** double-click **`Job Agent Dashboard.bat`** (or run
-   `.venv\Scripts\python -m jobagent web`). It opens at http://localhost:8600.
-4. **Upload your resume** on the **My resume** page. Check the parsed data (**Edit data**) – every
-   tailored resume is built from it.
+1. **AI provider:** add `GROQ_API_KEY=gsk_...` to `.env` (get one at
+   [console.groq.com/keys](https://console.groq.com/keys)). `config.yaml` defaults to
+   `llm.backend: groq` with `openai/gpt-oss-120b` and a `gpt-oss-20b` fallback.
+   Optional: `GROQ_MODEL`, `GROQ_FALLBACK_MODEL`, `AI_PROVIDER` env overrides.
+2. **Profile:** open the dashboard and complete **My Profile** (graduation year, CGPA, 10th/12th
+   marks, backlogs, preferred cities) — the eligibility engine depends on it.
+3. **Start the dashboard:** `python -m jobagent web` (Windows: double-click
+   `Job Agent Dashboard.bat`) → http://localhost:8600
+4. **Upload your resume** on the **Resume Studio** page. Check the parsed data — every tailored
+   resume is built from it.
+
+The defaults ship tuned for a B.Tech CSE (AI & ML) 2027 fresher in Hyderabad (AI/ML/software
+roles, ₹6+ LPA, open to Bengaluru/Pune/Chennai/Mumbai/Gurugram/Noida + remote India). Everything
+is editable — profile, keywords, locations — none of it is a hardcoded rule.
 
 ## Using it
 
-1. **Search & jobs → Search.** Optionally score the new jobs right away (~10 s per job).
-2. Open a job from **Matches** and read why it fits.
-3. Click **Tailor resume** (~30–60 s). Review the PDF, the change list and any **Added skills**.
+1. **Jobs → Search.** Optionally score the new jobs right away (~5-10 s per job on Groq).
+2. Open a job from **Matches**: check the **eligibility table** (batch/CGPA checks) and the match
+   dimensions.
+3. Click **Tailor resume**. Review the PDF, the change list and any **Added skills**.
 4. Click **Auto-fill application**. A Chrome window opens with the form filled:
    - **red** outline = needs your answer · **orange** = couldn't be filled automatically
-   - **LinkedIn:** log in once in the agent's Chrome window (it waits, then remembers). Easy Apply is
-     filled step by step and stops at *Submit application*.
-   - **Naukri / Instahyre:** their Apply buttons submit instantly with your profile on that site, so
-     the agent never clicks them. Click Apply yourself, then **Fill current page** if a questionnaire opens.
-   - Multi-step forms: after moving to the next page, click **Fill current page**.
-5. Click **Submit** in the browser yourself, then **Mark applied** in the dashboard.
+   - **LinkedIn:** log in once in the agent's Chrome window (it waits, then remembers). Easy Apply
+     fills step by step and stops at *Submit application*.
+   - **Naukri / Instahyre:** their Apply buttons submit instantly, so the agent never clicks
+     them. Click Apply yourself, then **Fill current page** if a questionnaire opens.
+   - Postings with fraud warnings (fees, suspicious links) are never auto-filled.
+5. Click **Submit** in the browser yourself, then **Mark applied** — the duplicate guard takes
+   over from there.
+6. Track everything on **Applications**, and use **AI Assistant** before interviews.
 
-### Command line (optional)
+### Command line
 
-```powershell
-python -m jobagent discover [--source companies,linkedin,naukri,instahyre]
+```bash
+python -m jobagent discover [--source companies,linkedin,naukri,instahyre,remotive,arbeitnow]
 python -m jobagent score --limit 30
 python -m jobagent tailor --job <id>
 python -m jobagent apply            # interactive terminal version of auto-fill
+python -m jobagent enrich --all     # re-run salary/batch/deadline extraction
+python -m jobagent verify           # re-check apply links of matched jobs
+python -m jobagent analytics        # pipeline + source quality in the terminal
 python -m jobagent status
 python -m jobagent web              # dashboard
 ```
 
-### Groq backend
+### Docker deployment
 
-To run the agent on [Groq](https://groq.com) instead of Claude (fast inference, free tier available):
-
-1. Create a key at [console.groq.com/keys](https://console.groq.com/keys) and put it in `.env`:
-   ```
-   GROQ_API_KEY=gsk_...
-   ```
-2. In `config.yaml` (or Settings → AI model in the dashboard) set:
-   ```yaml
-   llm:
-     backend: groq
-     groq_model: openai/gpt-oss-120b   # or openai/gpt-oss-20b, qwen/qwen3.8-27b, ...
-   ```
-
-Notes:
-- `llm.model` is used as-is when it isn't a Claude model, so you can also just set `model: openai/gpt-oss-20b`.
-- Groq has no document attachment, so your resume PDF is sent as extracted text.
-- The Claude `score_effort` / `tailor_effort` / `form_effort` levels map automatically to Groq's
-  `reasoning_effort` (low/medium/high) on the `openai/gpt-oss-*` models, and are ignored on others.
-  You can also pin `llm.reasoning_effort: low|medium|high` explicitly.
-- Answers use Groq's structured-output (JSON schema) mode with an automatic fallback to JSON mode
-  for models that don't support it, so any Groq model works.
-
-### Instahyre settings
-
-Instahyre searches by **skills** rather than job titles. Set them in `config.yaml` under
-`sources.instahyre`: `skills` (e.g. `[Java, Spring Boot]`), `job_functions` (10 = Backend,
-1 = Full-Stack, 76 = Other Software Development) and `years` (blank = your experience from the form answers).
-
-### Adding company career portals
-
-In **Settings → Career portals (any company)**, paste `Name | careers URL`, for example:
-
-```
-Amazon | https://www.amazon.jobs/en/
-JPMorgan Chase | https://jpmc.fa.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/jobs
-Atlassian | https://www.atlassian.com/company/careers/all-jobs
+```bash
+cp .env.example .env       # add GROQ_API_KEY
+cp config.example.yaml config.yaml
+docker compose up -d --build
+# dashboard at http://localhost:8600 (set DASHBOARD_TOKEN in .env if you expose it)
 ```
 
-The first search detects the site type and remembers it (`data/portal_cache.json`). Tips for sites the
-agent has to browse: paste the page that lists jobs (not the company homepage); if the site's search puts
-the keyword in the URL, you can paste that URL with `{keyword}` in place of the search term, e.g.
-`https://careers.example.com/search?q={keyword}&location=India`. Browsed sites use one Claude call per
-company per search, and jobs whose location can't be confirmed as India/remote are skipped.
+The image includes Chromium for the apply flows; build with `--build-arg INSTALL_BROWSER=false`
+for a lean dashboard+discovery deployment. State lives in mounted volumes (`data/`, `profile/`,
+`output/`); `/api/health` is ready for uptime checks. CI (GitHub Actions) runs the offline test
+suite, the TypeScript check, the dashboard build and the Docker build on every push.
 
-### Adding companies
+## Tests
 
-Add a company in **Settings → Company career sites** (or under `sources.companies` in `config.yaml`):
+```bash
+pip install -r requirements.txt pytest
+GROQ_API_KEY=gsk_dummy python -m pytest tests/ -q     # 76 offline tests, no network
+```
 
-| System | What to enter | Example |
-|---|---|---|
-| Greenhouse | board name from `job-boards.greenhouse.io/<name>` | `gitlab` |
-| Lever | board name from `jobs.lever.co/<name>` | `zeta` |
-| Ashby | board name from `jobs.ashbyhq.com/<name>` | `notion` |
-| **Workday** | careers URL, optionally with a display name | `Mastercard \| https://mastercard.wd1.myworkdayjobs.com/CorporateCareers` |
-| SmartRecruiters | company id from `jobs.smartrecruiters.com/<Id>` | `ServiceNow` |
-| Workable | slug from `apply.workable.com/<slug>` | `apna` |
-
-Greenhouse, Lever, Ashby and Workable list every open role; Workday and SmartRecruiters companies are
-searched with your keywords (big employers list thousands of roles). Title and location filters apply
-to all of them. Workday applications need a per-company account: sign in when the form asks, then use
-**Fill current page**. iCIMS, Taleo, SuccessFactors and custom career sites aren't scanned directly –
-those jobs usually reach you through LinkedIn, Naukri or Instahyre.
+Covers: enrichment parsing (LPA/batches/CGPA/deadlines/fraud), eligibility classification,
+database migrations/dedup/events, the Groq layer (structured outputs, JSON-mode fallback,
+fallback model, usage tracking, caching, request budget), the API lifecycle (auth, filters,
+duplicate-application guard, upload validation), profile-aware prefit and the new source
+adapters with mocked HTTP.
 
 ## Project structure
 
 ```
 jobagent/
-  sources/          job discovery: portals.py (any careers URL: detection + Amazon, Google, Apple,
-                    Eightfold, Oracle, MyNextHire, generic), ats.py (Greenhouse/Lever/Ashby), ats_more.py (Workday/
-                    SmartRecruiters/Workable), linkedin.py, naukri.py,
-                    instahyre.py, location.py
-  matcher.py        Claude match scoring
+  sources/          discovery: portals.py (any careers URL + detection), ats.py (Greenhouse/
+                    Lever/Ashby), ats_more.py (Workday/SmartRecruiters/Workable), linkedin.py,
+                    naukri.py, instahyre.py, arbeitnow.py, remotive.py, india_companies.py
+  enrich.py         deterministic India-first enrichment (salary/batch/CGPA/deadlines/fraud)
+  eligibility.py    4-level eligibility engine (batch, CGPA, backlogs, experience)
+  profile.py        structured candidate profile + form-facts bridge
+  matcher.py        explainable matching (AI dimensions + eligibility gating)
+  prefit.py         local fit estimate (profile-aware level penalty)
   resume.py         resume parsing, tailoring, one-page PDF rendering
-  templates/        resume HTML template
-  apply.py          form reading + Claude answers + filling (multi-pass, verified)
+  apply.py          form reading + AI answers + filling (multi-pass, verified, fraud-guarded)
   linkedin_apply.py LinkedIn Easy Apply / external-apply flow
-  llm.py            LLM calls (Claude Code CLI / Anthropic API / Groq API) -> Pydantic models
-  server.py         FastAPI backend for the dashboard
-  tasks.py          background tasks with live logs
-  db.py             SQLite job tracker
+  llm.py            LLM layer (Groq primary, Anthropic API, Claude Code CLI): structured
+                    outputs, usage tracking, caching, fallback models, injection defence
+  ai_services.py    interview prep, follow-ups, skill gaps, quality checks, answer KB
+  analytics.py      real-data analytics for the dashboard
+  server.py         FastAPI backend + dashboard hosting
+  tasks.py          cross-platform background tasks + optional auto-discovery
+  db.py             SQLite job tracker (migrations, events, notifications, answers, usage)
   cli.py            command-line entry point
-web/                React + TypeScript + Tailwind dashboard (built copy in web/dist)
+web/                React 19 + TypeScript + Tailwind dashboard (built copy in web/dist)
+tests/              76 offline tests
 config.example.yaml all settings, documented
+IMPLEMENTATION_STATUS.md phase-by-phase progress + known limitations
 ```
 
 Your personal files are never committed: `config.yaml`, `.env`, `profile/` (resume), `output/`
 (tailored resumes), `data/` (job database) and the browser profile are in `.gitignore`.
 
-### Changing the dashboard UI
+## Ethics & compliance notes
 
-```powershell
-cd web
-npm install
-npm run dev      # live reload at http://localhost:5173 (keep `python -m jobagent web` running)
-npm run build    # updates web/dist, served by the Python app
-```
-
-## Safeguards and limits
-
-- **Human in the loop:** the agent never clicks a final Submit button.
-- **Truthful answers:** form answers come only from your resume and the facts you enter; salaries,
-  notice period, date of birth etc. are never guessed. Legal consents are always left to you.
-- **Tailoring:** employers, titles, dates, degrees and numbers are never changed. Added skills (on by
-  default, `llm.allow_added_skills`) go only in the Skills section and are listed per job, so be ready
-  to discuss them in interviews, or turn the option off.
-- **LinkedIn / Naukri terms of service** prohibit automated tools. Discovery reads public pages with
-  rate limiting and applying stays one job at a time with a manual submit, but heavy use can still get
-  an account restricted. Use it moderately.
-- **Usage:** on the subscription backend, every score/tailor/fill counts toward your plan's usage
-  limits; lower the effort settings if you run large batches.
-
-## Tech stack
-
-Python · Claude (Claude Code CLI / Anthropic SDK, structured outputs) or Groq (OpenAI-compatible SDK,
-structured outputs) · Playwright · FastAPI · SQLite · Jinja2 · React 19 · TypeScript · Tailwind CSS · Vite
+- Only legitimate sources: official career pages, public ATS feeds and documented public APIs.
+  Sites without public APIs whose terms prohibit scraping (Internshala, Foundit, Shine,
+  TimesJobs, Wellfound) are not scraped; their roles surface via aggregators.
+- LinkedIn is used through its public (logged-out) pages, throttled, one job at a time, with the
+  final submit left to you.
+- The agent never pays fees, never bypasses CAPTCHA/MFA/anti-bot systems, and pauses for manual
+  verification when a site requires it.

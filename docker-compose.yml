@@ -1,0 +1,19 @@
+services:
+  jobapply:
+    build:
+      context: .
+      args:
+        INSTALL_BROWSER: "true"     # "false" for a lean dashboard+discovery image
+    image: jobapply:latest
+    ports:
+      - "127.0.0.1:8600:8600"      # keep it local; expose consciously (then set DASHBOARD_TOKEN)
+    env_file:
+      - .env                       # GROQ_API_KEY etc. Never commit your real .env
+    environment:
+      - DASHBOARD_TOKEN=${DASHBOARD_TOKEN:-}
+    volumes:
+      - ./data:/app/data           # jobs.db, logs, screenshots
+      - ./profile:/app/profile     # candidate profile + master resume
+      - ./output:/app/output       # tailored resumes + cover letters
+      - ./config.yaml:/app/config.yaml   # your edited settings
+    restart: unless-stopped
