@@ -10,7 +10,7 @@ from markupsafe import Markup, escape
 
 from jobagent.browser import pdf_page
 from jobagent.config import MASTER_RESUME_JSON, OUTPUT_DIR, cfg
-from jobagent.llm import structured
+from jobagent.llm import structured, untrusted
 from jobagent.models import Resume, TailoredResume
 
 TEMPLATES = Path(__file__).parent / "templates"
@@ -32,6 +32,7 @@ def parse_pdf(pdf_path: Path) -> Resume:
         content="Extract the attached resume.",
         pdfs=[pdf_path],
         effort="low",
+        task="parse",
     )
     MASTER_RESUME_JSON.parent.mkdir(parents=True, exist_ok=True)
     MASTER_RESUME_JSON.write_text(resume.model_dump_json(indent=2), encoding="utf-8")
@@ -94,10 +95,11 @@ def tailor(job: dict, master: Resume) -> tuple[TailoredResume, Path, Path]:
         ),
         content=(
             f"Company: {job['company']}\nRole: {job['title']}\nLocation: {job['location']}\n\n"
-            f"<job_description>\n{job['description']}\n</job_description>\n\n"
+            f"{untrusted('job_description', job['description'] or '')}\n\n"
             "Produce the tailored resume and cover letter."
         ),
         effort=cfg("llm.tailor_effort", "high"),
+        task="tailor",
     )
     new = _unknown_skills(result.resume, master)
     if cfg("llm.allow_added_skills", True):

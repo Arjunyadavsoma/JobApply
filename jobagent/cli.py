@@ -125,7 +125,7 @@ def run() -> None:
 
 
 @app.command(hidden=True)
-def search(sources: str = typer.Option(None, help="Comma-separated: companies,linkedin,naukri"),
+def search(sources: str = typer.Option(None, help="Comma-separated: companies,linkedin,naukri,remotive,arbeitnow"),
            score_limit: int = typer.Option(0, help="Then score up to N new jobs (0 = don't)"),
            tailor_limit: int = typer.Option(0, help="Then tailor up to N good matches (0 = don't)")) -> None:
     """Dashboard 'Search' button: find jobs, optionally score and tailor them."""
@@ -138,6 +138,70 @@ def search(sources: str = typer.Option(None, help="Comma-separated: companies,li
         console.rule("Tailoring resumes for good matches")
         tailor(tailor_limit, None)
     console.rule("Done")
+
+
+@app.command()
+def enrich(all_jobs: bool = typer.Option(False, "--all", help="Re-enrich every job, not just new ones")) -> None:
+    """Extract salary / batch / experience / deadline / fraud flags from stored job text."""
+    from jobagent.enrich import enrich_pending
+
+    n = enrich_pending(only_missing=not all_jobs)
+    console.print(f"[green]Enriched {n} job(s).[/green]")
+
+
+@app.command()
+def verify(limit: int = typer.Option(20, help="Max stale jobs to re-check")) -> None:
+    """Re-check apply URLs of scored/tailored jobs and mark broken ones."""
+    import httpx
+
+    from jobagent import db
+    rows = [r for r in db.by_status("scored", "tailored") if not r["verified"]][:limit]
+    if not rows:
+        console.print("Nothing to verify.")
+        return
+    ok = 0
+    with httpx.Client(follow_redirects=True, timeout=20) as http:
+        for r in rows:
+            try:
+                resp = http.head(r["apply_url"] or r["url"])
+                if resp.status_code >= 400:
+                    resp = http.get(r["apply_url"] or r["url"])
+                good = resp.status_code < 400
+            except httpx.HTTPError as e:
+                good, resp = False, None
+            if good:
+                ok += 1
+                db.update(r["id"], verified=1, last_verified_at=db.now())
+            else:
+                db.record_event(r["id"], "verify", "Apply URL check failed")
+            console.print(f"  {'OK ' if good else 'BAD'} {r['company']} - {r['title']}")
+    console.print(f"[green]{ok}/{len(rows)} apply links still work.[/green]")
+
+
+@app.command()
+def analytics() -> None:
+    """Show job-search analytics computed from your own data."""
+    from jobagent import analytics as A
+
+    d = A.dashboard()
+    m = d["metrics"]
+    console.rule("Pipeline")
+    for k, v in m.items():
+        console.print(f"  {k:<20} [b]{v}[/b]")
+    console.rule("Applications per week")
+    for w in d["applications_over_time"][-8:]:
+        bar = "█" * w["applications"]
+        console.print(f"  {w['week']}  {bar} {w['applications']}")
+    console.rule("Source quality")
+    t = Table("source", "jobs", "avg score", "applied", "in progress")
+    for s in d["source_quality"]:
+        t.add_row(s["source"], str(s["jobs"]), str(s["avg_score"] or "-"), str(s["applied"]),
+                  str(s["in_progress"]))
+    console.print(t)
+    if d["upcoming_deadlines"]:
+        console.rule("Upcoming deadlines")
+        for dl in d["upcoming_deadlines"][:10]:
+            console.print(f"  {dl['deadline']}  {dl['company']} - {dl['title']}")
 
 
 @app.command()

@@ -1,36 +1,61 @@
 # Copy to config.yaml and edit. Everything here is read by `python -m jobagent ...`.
+# The defaults below are tuned for an India-first fresher search (B.Tech 2027, AI/ML roles,
+# Hyderabad + remote India). Change anything - these are YOUR settings, never hardcoded rules.
 
 search:
-  # Job titles / keywords to search for on LinkedIn and Naukri.
+  # Job titles / keywords to search for on LinkedIn, Naukri and Remotive.
   keywords:
-  - Backend Developer
-  - Backend Engineer
+  - AI Engineer
+  - ML Engineer
+  - Software Engineer
+  - Python Developer
+  - Data Analyst
 
   locations:
+  - Hyderabad
   - Bengaluru
   - Remote
-  - Hyderabad
   # Only keep career-portal jobs whose title contains one of these words (case-insensitive).
   # Leave empty to keep every job from the listed companies.
   title_must_include:
   - engineer
   - developer
-  # Drop jobs whose title contains any of these.
+  - analyst
+  - data
+  - ai
+  - ml
+  # Drop jobs whose title contains any of these. NOTE: "intern" is NOT excluded by default -
+  # internships are target roles for freshers. Senior titles are excluded instead.
   title_exclude:
   - principal
   - staff
   - director
-  - intern
+  - head of
+  - architect
   # Drop career-portal jobs whose location doesn't mention one of these (empty = keep all).
   location_include:
   - india
+  - hyderabad
   - bengaluru
   - bangalore
+  - pune
+  - chennai
+  - mumbai
+  - gurugram
+  - gurgaon
+  - noida
   - remote
   # Scoring order: jobs whose location/source matches earlier entries are scored first.
-  priority_locations: [india, naukri, bengaluru, remote]
+  priority_locations: [hyderabad, india, naukri, remote]
   max_age_days: 14          # LinkedIn "posted within" filter
-  min_match_score: 60      # jobs scoring below this are marked "skipped"
+  min_match_score: 60       # jobs scoring below this are marked "skipped"
+  # Keep jobs located in India + remote jobs open to India ("any" keeps everything).
+  location_mode: india_remote
+  # Seed the default India MNC career registry (TCS-style drives, Microsoft/Google/Oracle India,
+  # product companies) when you haven't configured your own company list. Set false to disable.
+  use_india_registry: true
+  # Automatic discover+score run every N hours in the dashboard (0 = off).
+  autodiscover_hours: 0
 
 sources:
   linkedin:
@@ -43,10 +68,16 @@ sources:
     enabled: true
     pages: 3                # 20 jobs per page
     # Instahyre searches by skills rather than job titles.
-    skills: [Java, Spring Boot]
+    skills: [Python, Machine Learning]
     # Job functions: 10 = Backend Development, 1 = Full-Stack Development, 76 = Other Software Development
-    job_functions: [10, 1]
+    job_functions: [10, 1, 76]
     years:                  # your years of experience; blank = use applicant.total_experience_years
+  remotive:                 # remote-only jobs (legitimate public API, no key)
+    enabled: true
+    pages: 1
+  arbeitnow:                # EU + international remote jobs (public API, no key)
+    enabled: false
+    pages: 1
   # Company career portals. Use the board slug from the careers URL:
   #   Greenhouse: https://job-boards.greenhouse.io/<slug>   or boards.greenhouse.io/<slug>
   #   Lever:      https://jobs.lever.co/<slug>
@@ -56,8 +87,9 @@ sources:
   companies:
     # Career portals: paste ANY company's careers URL ('Name | URL'). The agent detects the site:
     # Amazon, Google, Apple, Eightfold (Microsoft, Qualcomm...), Oracle (JPMorgan...), MyNextHire (Swiggy...),
-    # or an embedded Greenhouse/Lever/Workday/... board. Other sites are searched in a hidden browser
-    # with Claude picking the job links (slower; one Claude call per company per search).
+    # SuccessFactors, or an embedded Greenhouse/Lever/Workday/... board. Other sites are searched in a
+    # hidden browser with the AI picking the job links (slower; one AI call per company per search).
+    # Leave this list EMPTY to auto-seed the India registry (25+ MNC + product company career pages).
     portals:
     - Amazon | https://www.amazon.jobs/en/
     - Google | https://www.google.com/about/careers/applications/jobs/results
@@ -78,18 +110,18 @@ sources:
     - apna
 
 llm:
-  # subscription = use your Claude Pro/Max login via the Claude Code CLI (no API credits needed)
-  # api          = use ANTHROPIC_API_KEY from .env (pay-as-you-go API credits)
-  # groq         = use GROQ_API_KEY from .env (Groq's OpenAI-compatible API; gpt-oss & other open models)
-  backend: subscription
-  # claude_cli: "C:/path/to/claude.exe"   # optional; auto-detected (PATH or the VS Code extension)
-  model: claude-opus-5
-  # Groq backend (llm.backend: groq):
-  # groq_model: openai/gpt-oss-120b   # or openai/gpt-oss-20b, qwen/qwen3.8-27b, ...
+  # groq         = GROQ_API_KEY from .env - RECOMMENDED (free tier available, fast open models)
+  # api          = ANTHROPIC_API_KEY from .env (pay-as-you-go API credits)
+  # subscription = use your Claude Pro/Max login via the Claude Code CLI
+  backend: groq
+  # Groq backend settings (llm.backend: groq):
+  model: openai/gpt-oss-120b      # or openai/gpt-oss-20b, qwen/qwen3-8b, ...
+  fallback_model: openai/gpt-oss-20b   # used when the primary model errors or returns junk
   # groq_base_url: https://api.groq.com/openai/v1   # override for another OpenAI-compatible provider
-  # reasoning_effort: medium   # only for Groq reasoning models (openai/gpt-oss-*): low | medium | high
-  # Effort per task: low | medium | high | xhigh | max (Claude levels; on Groq these map to
-  # reasoning_effort low/medium/high for the openai/gpt-oss-* models)
+  reasoning_effort: medium        # low | medium | high (gpt-oss models)
+  max_requests_per_day: 0         # 0 = unlimited; set a cap to protect your quota
+  # claude_cli: "C:/path/to/claude.exe"   # subscription backend only; auto-detected
+  # Effort per task (Claude levels; on Groq gpt-oss these map to reasoning_effort low/medium/high)
   score_effort: low
   tailor_effort: high
   form_effort: medium
@@ -99,16 +131,17 @@ browser:
   profile_dir: .browser_profile   # persistent profile, so you stay logged in to LinkedIn/Naukri
 
 # Facts used to answer application-form questions that aren't in your resume.
-# The agent never invents answers: anything it can't answer from here or your resume is left blank for you.
+# Prefer editing the Candidate Profile in the dashboard (it stores richer India-first data);
+# these values are merged into the profile on first run.
 applicant:
   phone: +91 90000 00000
   linkedin_url: https://www.linkedin.com/in/your-handle
   github_url: https://github.com/your-handle
   portfolio_url: ''
-  current_location: Bengaluru, India
+  current_location: Hyderabad, India
   willing_to_relocate: Yes
-  work_authorization: Indian citizen; authorized to work in India. Requires visa sponsorship for other countries.
-  notice_period: 30 days
+  work_authorization: Indian citizen; authorized to work in India
+  notice_period: ''
   current_ctc: ''
   expected_ctc: ''
   years_of_experience: ''

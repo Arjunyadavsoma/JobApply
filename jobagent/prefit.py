@@ -1,12 +1,16 @@
-"""Quick fit estimate (0-100) for every job, computed locally - no Claude call.
+"""Quick fit estimate (0-100) for every job, computed locally - no LLM call.
 
-Used to order jobs that Claude hasn't scored yet, and to decide which jobs to score first.
+Used to order jobs that haven't been scored yet, and to decide which jobs to score first.
   - skills (up to 50): how many of your resume's skills the job title/description mention
   - title  (up to 20): the title matches your search keywords / target roles
   - experience (up to 30): the years the job asks for fit your experience
-then scaled down when the job asks for far more experience, is at the wrong level (Staff, Fresher, ...),
-or is built around a stack you don't have (Go, C#, SAP, ...).
-Claude's score (after "Score") is always the real ranking; this is only a first pass.
+then scaled down when the job asks for far more experience, is at the wrong level for the
+CANDIDATE'S career stage, or is built around a stack the candidate doesn't have.
+
+The level penalty is profile-aware: for a fresher/entry-level candidate, fresher/trainee/intern
+titles are the TARGET (no penalty) while senior titles (Staff, Principal, ...) are penalised;
+for an experienced candidate the reverse holds. The AI score (after "Score") is always the
+real ranking; this is only a first pass.
 """
 from __future__ import annotations
 
@@ -22,9 +26,12 @@ STACKS = ["java", "python", "go", "golang", "c#", ".net", "dotnet", "php", "ruby
           "node", "typescript", "javascript", "kotlin", "swift", "scala", "rust", "c++", "elixir", "sap", "abap",
           "salesforce", "android", "ios", "flutter", "react native", "angular", "vue", "next.js", "django",
           "flask", "fastapi", "laravel", "spring boot", "react", "mainframe", "cobol"]
-# Levels that don't fit ~2-3 years of experience.
-LEVEL_WRONG = ["staff", "principal", "architect", "director", "head of", "vp", "vice president", "lead",
-               "fresher", "trainee", "intern", "internship", "graduate", "apprentice"]
+# Levels that don't fit a candidate with ~2-3 years of experience (the historical default).
+SENIOR_LEVELS = ["staff", "principal", "architect", "director", "head of", "vp", "vice president", "lead",
+                 "senior", "sr.", "manager", "sde-3", "sde3"]
+# Entry-level signals: wrong level for an experienced candidate, RIGHT level for a fresher.
+ENTRY_LEVELS = ["fresher", "trainee", "intern", "internship", "graduate", "apprentice", "entry level",
+                "entry-level", "graduate engineer"]
 STRONG_ASK = re.compile(r"[^.\n]{0,60}(years|yrs|experience|expert|strong|proficien)")
 
 
@@ -59,9 +66,22 @@ def resume_skills(r: Resume) -> list[str]:
     return out
 
 
-def _your_years() -> float | None:
-    m = re.search(r"\d+(\.\d+)?", str(cfg("applicant.total_experience_years", "")))
-    return float(m.group()) if m else None
+def _candidate_stage() -> str:
+    """'fresher' | 'experienced' - from the candidate profile (or applicant config)."""
+    try:
+        from jobagent.profile import load as load_profile
+        p = load_profile()
+        if p.candidate_type == "experienced" or (p.total_experience_years or 0) >= 3:
+            return "experienced"
+        return "fresher"
+    except Exception:
+        years = _your_years()
+        return "experienced" if years and years >= 3 else "fresher"
+
+
+def _wrong_levels(stage: str) -> list[str]:
+    """Titles at the wrong level for THIS candidate: seniors for a fresher, entry for a veteran."""
+    return ENTRY_LEVELS if stage == "experienced" else SENIOR_LEVELS
 
 
 def _required_years(text: str) -> tuple[float, float] | None:
@@ -77,6 +97,11 @@ def _required_years(text: str) -> tuple[float, float] | None:
             if lo <= 20 and (best is None or lo < best[0]):
                 best = (lo, lo + 3)
     return best
+
+
+def _your_years() -> float | None:
+    m = re.search(r"\d+(\.\d+)?", str(cfg("applicant.total_experience_years", "")))
+    return float(m.group()) if m else None
 
 
 def estimate(job, skills: list[str], keywords: list[str], years: float | None) -> int:
@@ -103,7 +128,7 @@ def estimate(job, skills: list[str], keywords: list[str], years: float | None) -
         else:
             exp_pts, factor = 0, 0.45  # asks for far more experience - rarely worth it
 
-    if any(_has(title, w) for w in LEVEL_WRONG):
+    if any(_has(title, w) for w in _wrong_levels(_candidate_stage())):
         factor = min(factor, 0.5)
 
     yours = set(skills)

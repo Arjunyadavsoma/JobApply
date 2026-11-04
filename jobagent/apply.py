@@ -17,11 +17,13 @@ from rich.prompt import Prompt
 
 from jobagent import db
 from jobagent.browser import browser_context
-from jobagent.config import cfg
-from jobagent.llm import LLMError, structured
+from jobagent.config import DATA_DIR, cfg
+from jobagent.llm import LLMError, structured, untrusted
 from jobagent.models import FormAnswers, Resume
 
 console = Console()
+
+SCREENSHOT_DIR = DATA_DIR / "screenshots"
 
 # Collects every fillable control in a frame, tags it with data-ja-id and returns a description.
 EXTRACT_JS = r"""
@@ -225,7 +227,8 @@ def ask_claude(fields: list[FormField], job, resume: Resume, cover_letter: str,
                already: list[FormField]) -> FormAnswers:
     from datetime import date
 
-    facts = "\n".join(f"- {k}: {v}" for k, v in (cfg("applicant", {}) or {}).items() if v)
+    from jobagent.profile import facts_for_forms
+    facts = "\n".join(f"- {k}: {v}" for k, v in facts_for_forms().items())
     context = [{"label": f.meta["label"], "value": f.meta["value"]} for f in already if not _is_empty(f)]
     return structured(
         FormAnswers,
@@ -233,12 +236,13 @@ def ask_claude(fields: list[FormField], job, resume: Resume, cover_letter: str,
                                   today=date.today().isoformat()),
         content=(
             f"Job: {job['title']} at {job['company']} ({job['location'] or 'location n/a'})\n\n"
-            f"<job_description>\n{job['description'] or ''}\n</job_description>\n\n"
+            f"{untrusted('job_description', job['description'] or '')}\n\n"
             f"<cover_letter>\n{cover_letter}\n</cover_letter>\n\n"
             f"<already_filled>\n{json.dumps(context, indent=1)}\n</already_filled>\n\n"
             f"<form_fields_to_fill>\n{json.dumps([f.meta for f in fields], indent=1)}\n</form_fields_to_fill>"
         ),
         effort=cfg("llm.form_effort", "medium"),
+        task="form",
     )
 
 
@@ -320,11 +324,40 @@ def _upload_files(fields: dict[str, FormField], files: dict[str, Path]) -> int:
 TEXTLIKE = ("text", "textarea", "email", "tel", "url", "number", "date")
 
 
+def _screenshot(page, job_id: str, tag: str) -> str | None:
+    """Debug evidence for every fill step; failure to screenshot never blocks the flow."""
+    try:
+        SCREENSHOT_DIR.mkdir(parents=True, exist_ok=True)
+        path = SCREENSHOT_DIR / f"{job_id}_{tag}.png"
+        page.screenshot(path=str(path), full_page=True)
+        return str(path)
+    except PWError:
+        return None
+
+
+def _fraud_guard(job) -> list[str]:
+    """Refuse to auto-fill when trust warnings are unresolved (payment asks, odd domains)."""
+    import json as _json
+    try:
+        flags = _json.loads(job["fraud_flags"] or "[]")
+    except ValueError:
+        flags = []
+    return [f for f in flags if isinstance(f, str)]
+
+
 def autofill(page: Page, job, resume: Resume, cover_letter: str, files: dict[str, Path], passes: int = 3,
              root: str | None = None) -> None:
     """Fill the current page: upload files, then up to `passes` rounds, since answering
     one question (e.g. country) often reveals new ones (e.g. state)."""
     from jobagent.resume import load_master
+
+    flags = _fraud_guard(job)
+    if flags:
+        console.print("[red]Trust warnings on this job - NOT auto-filling:[/red]")
+        for f in flags:
+            console.print(f"  - {f}")
+        console.print("Verify the employer and use the original job link manually if it is genuine.")
+        return
 
     fields = extract_fields(page, read_options=False, root=root)
     if not fields and root:
@@ -391,6 +424,9 @@ def autofill(page: Page, job, resume: Resume, cover_letter: str, files: dict[str
         console.print("[red]Needs you (outlined red):[/red] " + "; ".join(dict.fromkeys(red)))
     if failed:
         console.print("[yellow]Couldn't fill (outlined orange):[/yellow] " + "; ".join(failed.values()))
+    tag = (page.url or "page").split("/")[-1][:12].replace(".", "") or "page"
+    _screenshot(page, job["id"], f"filled_{tag}")
+    db.record_event(job["id"], "apply", f"Auto-filled {filled} fields ({len(red)} need you)")
 
 
 def _job_materials(job) -> tuple[Resume, str, dict[str, Path]]:
