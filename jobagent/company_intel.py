@@ -109,21 +109,36 @@ def research(job_id: str, *, force: bool = False) -> dict[str, Any]:
         else:
             careers_url = ""                                # never cite a page we couldn't read
 
-    from jobagent.llm import structured, untrusted
+    from jobagent.llm import LLMError, structured, untrusted
 
-    result = structured(
-        CompanyIntel,
-        system=_SYSTEM,
-        content=(
-            f"Company: {company}\nRole: {job['title']}\n"
-            f"Location: {job['location'] or 'n/a'}\n\n"
-            f"{untrusted('job_description', jd)}\n\n"
-            + (f"{untrusted('careers_page', careers_text)}\n\n" if careers_text else
-               "(no careers page could be fetched)\n\n")
-            + "Produce the research brief."
-        ),
-        effort="medium", task="company_research",
-    )
+    try:
+        result = structured(
+            CompanyIntel,
+            system=_SYSTEM,
+            content=(
+                f"Company: {company}\nRole: {job['title']}\n"
+                f"Location: {job['location'] or 'n/a'}\n\n"
+                f"{untrusted('job_description', jd)}\n\n"
+                + (f"{untrusted('careers_page', careers_text)}\n\n" if careers_text else
+                   "(no careers page could be fetched)\n\n")
+                + "Produce the research brief."
+            ),
+            effort="medium", task="company_research",
+        )
+    except LLMError as exc:
+        # Empty-honest degradation (Phase 19): without a working LLM we return
+        # what the posting itself gives us — never a fabricated brief.
+        db.record_event(job_id, "ai", f"Company research unavailable "
+                                      f"({str(exc)[:120]}) — no fabricated intel")
+        fallback = {
+            "company": company, "overview": "", "products": [], "tech_stack": [],
+            "responsibilities": [], "qualifications": [], "locations": [],
+            "career_page_url": careers_url, "facts_verified": [],
+            "interpretations": ["LLM unavailable — no research generated"],
+            "sources": sources, "generated_at": db.now(),
+        }
+        return {"intel": fallback, "sources": sources,
+                "updated_at": fallback["generated_at"], "llm_available": False}
     intel = result.model_dump()
     intel["company"] = company
     intel["career_page_url"] = careers_url

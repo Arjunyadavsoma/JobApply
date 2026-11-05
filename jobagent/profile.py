@@ -9,7 +9,6 @@ Never infers missing details; unknown stays unknown so eligibility says needs_ve
 """
 from __future__ import annotations
 
-from pathlib import Path
 
 from pydantic import BaseModel
 

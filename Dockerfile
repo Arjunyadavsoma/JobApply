@@ -35,9 +35,16 @@ COPY --from=web /build/web/dist ./web/dist
 VOLUME ["/app/data", "/app/profile", "/app/output"]
 ENV DATA_DIR=/app/data PROFILE_DIR=/app/profile OUTPUT_DIR=/app/output
 
+# Phase 19M: run as an unprivileged user. The volume dirs are chowned so the
+# first start can write config.yaml and the database.
+RUN useradd --create-home --uid 10001 jobapply \
+    && mkdir -p /app/data /app/profile /app/output \
+    && chown -R jobapply:jobapply /app
+USER jobapply
+
 EXPOSE 8600
-HEALTHCHECK --interval=60s --timeout=5s --start-period=15s \
-  CMD python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8600/api/health')" || exit 1
+HEALTHCHECK --interval=60s --timeout=5s --start-period=20s \
+  CMD python -c "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8600/health/live', timeout=4)" || exit 1
 
 # One-shot bootstrap on first start: create config.yaml from the example.
 CMD ["sh", "-c", "[ -f config.yaml ] || cp config.example.yaml config.yaml; \

@@ -3,8 +3,8 @@
 Live progress file for the JobApply platform transformation. Updated at the end of every
 implementation phase. Nothing is marked done that hasn't been tested.
 
-**Last updated:** 2026-11-05 (Phase 18) · branch `main` · test suite: **235 passed**
-(209 offline + 26 sandbox-E2E; 7 live-adapter tests opt-in; see PHASE_18_TEST_REPORT.md)
+**Last updated:** 2026-11-05 (Phase 19) · branch `main` · test suite: **419 passed**
+(363 offline + 56 sandbox-E2E; live-adapter tests opt-in; see docs/PHASE_19_TEST_REPORT.md)
 
 ---
 
@@ -368,6 +368,21 @@ bank + mock sessions). Web dist rebuilt (tsc + vite clean).
 
 ## Known limitations & remaining work
 
+### Phase 19 — production readiness ✅ (see docs/PHASE_19_REPORT.md)
+Security (SSRF guard + AES-256-GCM credential vault + secret redaction), DB schema
+versioning + validated backups/restore/retention, formal 18-state application
+lifecycle with human-only approval + idempotent submissions, /health/live|ready +
+/api/system/status|diagnostics monitoring, Groq circuit breaker + backoff/jitter
+retries + injection scanner, 8 new ATS sandbox fixtures (13 platforms
+SANDBOX_VERIFIED, 3 MANUAL_HANDOFF, VERIFIED honestly unclaimed), structured
+execution logs with error taxonomy, System dashboard page (health/matrix/
+credentials/backups), real GitHub Actions CI (tests, lint, TS build, gitleaks,
+E2E, Docker smoke), non-root Dockerfile, 25-step production acceptance test.
+Fixed real bugs: registry double-slash signature matching, company-intel
+crash without LLM key, state-machine approval bypass via forged rows.
+
+### Carried limitations
+
 1. **Multi-user isolation** — the product is a single-user, local-first tool (one SQLite
    file, localhost dashboard). Multi-tenancy would need auth + per-user data scoping across
    every module; deliberately out of scope for this transformation. Mitigations: optional
@@ -384,15 +399,18 @@ bank + mock sessions). Web dist rebuilt (tsc + vite clean).
 6. **Authorized submission (Mode C)** is intentionally conservative: it stops on anything
    unexpected. Jobs on Naukri/Instahyre/LinkedIn never auto-submit (one-click/profile
    flows) — assisted mode only.
+7. **Live-ATS verification** requires authorized test accounts (none owned);
+   sandbox evidence only. Docker images are CI-built (not built in the dev sandbox).
+   pip-audit advisory. mypy not configured.
 
 ## How to verify the claims
 
 ```bash
-pip install -r requirements.txt pytest
-GROQ_API_KEY=gsk_dummy python -m pytest tests/ -q      # 209 offline tests
-GROQ_API_KEY=gsk_dummy python -m pytest tests/e2e/ -m e2e -q   # 26 sandbox browser tests
-python -m pytest tests/e2e/test_live_adapters.py -m live --live -q    # 7 live API tests
+pip install -r requirements.txt pytest pytest-httpserver
+GROQ_API_KEY=gsk_dummy python -m pytest tests/ -q --ignore=tests/e2e/test_live_adapters.py   # 419 offline tests
+GROQ_API_KEY=gsk_dummy python -m pytest tests/e2e/ -m e2e -q   # 56 sandbox browser tests
 GROQ_API_KEY=gsk_real_key python -m pytest scripts/test_groq_backend.py  # real Groq smoke
 cd web && npm ci && npx tsc -p . --noEmit && npm run build
 python -m jobagent init && python -m jobagent web      # dashboard at :8600
+curl http://127.0.0.1:8600/health/live                  # liveness
 ```

@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Phenom Sandbox - Career Site Wrapper</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 700px; margin: 30px auto;
+           padding: 0 16px; color: #222; }
+    label { display: block; font-weight: 600; margin-top: 14px; font-size: 14px; }
+    input, select, textarea { width: 100%; padding: 8px; margin-top: 4px;
+           box-sizing: border-box; border: 1px solid #cfd7e0; border-radius: 4px; }
+    button, input[type='submit'] { margin-top: 20px; padding: 10px 20px; color: #fff;
+           border: 0; border-radius: 4px; cursor: pointer; font-weight: 600; }
+    .error, [role='alert'] { color: #c0392b; font-size: 13px; display: none; }
+    .step { border: 1px solid #e1e6eb; border-radius: 8px; padding: 20px; }
+    .confirmation { text-align: center; padding: 60px 20px; display: none; }
+    .confirmation h2 { color: #0a7f24; }
+</style>
+</head>
+<body>
+
+  <h1>Sandbox Corp Careers (powered by Phenom)</h1>
+  <p>Data Analyst, Graduate Program - Sandbox Corp (Gurugram)</p>
+  <div id="phenom_wrapper" class="ph-landing">
+    <button type="button" id="phenom_apply" class="ph-apply-button" style="background:#0057d8">
+      Apply Now
+    </button>
+  </div>
+  <!-- templates the wrapper injects on click (kept out of the initial DOM so
+       detection at wrapper stage reports phenom, not the underlying ATS) -->
+  <div style="display:none" data-templates>
+    <div id="identity_template">
+      <label for="first_name">First Name <span style="color:#c0392b">*</span></label>
+      <input id="first_name" name="first_name" type="text" required />
+      <div class="error" id="first_name_error" role="alert">First Name is required</div>
+      <label for="last_name">Last Name <span style="color:#c0392b">*</span></label>
+      <input id="last_name" name="last_name" type="text" required />
+      <div class="error" id="last_name_error" role="alert">Last Name is required</div>
+      <label for="email">Email Address <span style="color:#c0392b">*</span></label>
+      <input id="email" name="email" type="email" required />
+      <div class="error" id="email_error" role="alert">A valid email is required</div>
+      <label for="phone">Phone (optional)</label>
+      <input id="phone" name="phone" type="tel" />
+</div>
+    <div id="upload_template">
+      <label for="resume">Resume / CV <span style="color:#c0392b">*</span></label>
+      <input id="resume" name="resume" type="file" accept=".pdf,.doc,.docx" required />
+      <div class="error" id="resume_error" role="alert">Resume file is required</div>
+</div>
+    <div id="dropdown_template">
+      <label for="notice">What is your notice period? <span style="color:#c0392b">*</span></label>
+      <select id="notice" name="notice_period" required>
+        <option value="">Select...</option>
+        <option value="immediate">Immediate</option>
+        <option value="15 days">15 days</option>
+        <option value="1 month">1 month</option>
+        <option value="2 months">2 months</option>
+      </select>
+      <label>Are you willing to relocate? <span style="color:#c0392b">*</span></label>
+      <input type="radio" id="reloc_yes" name="relocation" value="yes" /> <label for="reloc_yes" style="display:inline">Yes</label>
+      <input type="radio" id="reloc_no" name="relocation" value="no" /> <label for="reloc_no" style="display:inline">No</label>
+</div>
+    <div id="terms_template">
+      <label style="font-weight:400">
+        <input type="checkbox" id="consent" name="data_consent" style="width:auto" />
+        I consent to the processing of my data for this application <span style="color:#c0392b">*</span>
+      </label>
+</div>
+  </div>
+  <div class="confirmation" id="confirmation">
+    <h2>Application submitted</h2>
+    <p>Confirmation PH-SBX-41002 emailed to you.</p>
+  </div>
+
+  <script>
+  function show(selector) { var el = document.querySelector(selector); if (el) el.style.display = 'block'; }
+  function hide(selector) { var el = document.querySelector(selector); if (el) el.style.display = 'none'; }
+  function validateRequired(ids) {
+    var ok = true;
+    ids.forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el && !el.value) { ok = false; show('#' + id + '_error'); el.setAttribute('aria-invalid', 'true'); }
+    });
+    return ok;
+  }
+
+  // Phenom career pages hand off to the underlying ATS on Apply — the sandbox
+  // injects the embedded (SmartRecruiters-style) form into the DOM on click,
+  // exactly like a redirect reveals the underlying platform.
+  var EMBEDDED = '<form id="phenom_form" class="smartrecruiters-embed sr-application-form" novalidate>' +
+    '<h3>Application Form (underlying ATS)</h3>' +
+    document.getElementById('identity_template').innerHTML +
+    document.getElementById('upload_template').innerHTML +
+    document.getElementById('dropdown_template').innerHTML +
+    document.getElementById('terms_template').innerHTML +
+    '<button type="submit" id="ph_submit" style="background:#0a7f24">Submit</button></form>';
+  document.getElementById('phenom_apply').addEventListener('click', function() {
+    hide('#phenom_wrapper');
+    var container = document.createElement('div');
+    container.innerHTML = EMBEDDED;
+    document.body.insertBefore(container.firstChild, document.querySelector('.confirmation'));
+    // remove the hidden template container so injected IDs stay unique
+    var tpl = document.querySelector('div[data-templates]');
+    if (tpl) tpl.remove();
+    document.getElementById('ph_submit').addEventListener('click', function(ev) {
+      ev.preventDefault();
+      if (!validateRequired(['first_name', 'last_name', 'email'])) return;
+      if (!document.getElementById('resume').files.length) { show('#resume_error'); return; }
+      hide('#phenom_form'); show('#confirmation');
+    });
+  });
+</script>
+</body>
+</html>

@@ -14,7 +14,7 @@ bot protection. Quirks describe how to be MORE careful, not less.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from urllib.parse import urlparse
 
 # ---------------------------------------------------------------- platforms
@@ -77,7 +77,7 @@ PLATFORMS: list[ATSPlatform] = [
                 notes="India-native ATS; forms inside authenticated portals mostly - "
                       "apply manually when a login is required."),
     ATSPlatform("zoho_recruit", "Zoho Recruit / Freshteam",
-                ("zoho.com/recruit", "zohorecruit.com", "freshteam.com"),
+                ("zohorecruit.com", "zoho.com/recruit", "freshteam.com", "careers.zoho.com"),
                 submit_selectors=("button[type='submit']",),
                 notes="Simple forms; India SMBs use these a lot."),
     ATSPlatform("successfactors", "SAP SuccessFactors",
@@ -135,7 +135,9 @@ def detect(url: str) -> dict:
     except ValueError:
         return {"platform": "generic", "name": "Generic company portal", "confidence": 0.0,
                 "evidence": "unparsable URL"}
-    blob = f"{host}/{path}"
+    # path already starts with "/" — appending another slash would break every
+    # path-bearing signature (host-only signatures were unaffected).
+    blob = f"{host}{path}" if path.startswith("/") else f"{host}/{path}"
     for p in PLATFORMS:
         for sig in p.hosts:
             if sig in blob:

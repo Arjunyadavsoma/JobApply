@@ -10,11 +10,10 @@ Pipeline per job:
 """
 from __future__ import annotations
 
-import json
 
 from jobagent import db
 from jobagent.config import cfg
-from jobagent.eligibility import evaluate as run_eligibility, row_to_facts, status_priority
+from jobagent.eligibility import evaluate as run_eligibility, row_to_facts
 from jobagent.llm import LLMError, structured, untrusted
 from jobagent.models import CandidateProfile, MatchResultV2, Resume
 from jobagent.sources.common import log

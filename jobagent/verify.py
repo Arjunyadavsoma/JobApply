@@ -259,17 +259,24 @@ def verify_job_row(row, http: httpx.Client | None = None) -> VerifyResult:
         res.fraud_flags.append("private or unparsable host in apply URL")
         return res
 
-    # --- HTTP checks ---
+    # --- HTTP checks (SSRF-guarded: every redirect hop is re-validated) ---
     avail_pts, page_pts, content_state = 0, 0, "unknown"
     own_client = http is None
     client = http or httpx.Client(follow_redirects=True, timeout=20,
                                   headers={"User-Agent": "Mozilla/5.0 (X11; Linux x86_64) JobApply-Verify/1.0"})
     try:
         try:
-            resp = client.get(url)
+            from jobagent.security import UrlValidationError, safe_request
+            resp = safe_request(url, client=client, headers={
+                "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) JobApply-Verify/1.0"})
             res.http_status = resp.status_code
             res.final_url = str(resp.url)
             res.redirect_chain = [str(h.url) for h in resp.history] + [str(resp.url)]
+        except UrlValidationError as e:
+            # Redirect landed on a blocked target — treat as suspicious.
+            res.state, res.note = "suspicious", f"blocked redirect target: {e.reason}"
+            res.fraud_flags.append("redirect to private/local address")
+            return res
         except httpx.HTTPError as e:
             res.note = f"HTTP error: {type(e).__name__}"
         if res.http_status is not None:

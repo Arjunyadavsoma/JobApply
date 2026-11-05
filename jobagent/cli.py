@@ -295,7 +295,6 @@ def analytics() -> None:
 @app.command()
 def backup(dest: Path = typer.Option(None, help="Where to write the backup (default: data/backups/)")) -> None:
     """Phase 17.11: hot-backup the SQLite database (WAL-safe via the backup API)."""
-    import shutil
     import sqlite3
 
     from jobagent.config import DATA_DIR

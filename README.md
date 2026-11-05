@@ -195,16 +195,18 @@ docker compose up -d --build
 
 The image includes Chromium for the apply flows; build with `--build-arg INSTALL_BROWSER=false`
 for a lean dashboard+discovery deployment. State lives in mounted volumes (`data/`, `profile/`,
-`output/`); `/api/health` is ready for uptime checks. CI (GitHub Actions) runs the offline test
+`output/`); `/health/live` + `/health/ready` are the uptime endpoints. CI (GitHub
+Actions) runs the offline test
 suite, the TypeScript check, the dashboard build and the Docker build on every push.
 
 ## Tests
 
 ```bash
-pip install -r requirements.txt pytest
-GROQ_API_KEY=gsk_dummy python -m pytest tests/ -q                 # 209 offline tests, no network
-GROQ_API_KEY=gsk_dummy python -m pytest tests/e2e/ -m e2e -q      # 26 sandbox browser tests (local fixtures)
-python -m pytest tests/e2e/test_live_adapters.py -m live --live -q # 7 live public-API tests (read-only, opt-in)
+pip install -r requirements.txt pytest pytest-httpserver
+GROQ_API_KEY=gsk_dummy python -m pytest tests/ -q --ignore=tests/e2e/test_live_adapters.py  # 419 tests (offline + sandbox E2E)
+python -m pytest tests/e2e/ -m e2e -q      # 56 sandbox browser tests (local fixtures, real Chromium)
+python -m pytest tests/e2e/test_live_adapters.py -m live --live -q # live public-API tests (read-only, opt-in)
+cd web && npm ci && npx tsc --noEmit && npm run build              # frontend gates
 ```
 
 Covers: enrichment parsing (LPA/batches/CGPA/deadlines/fraud), eligibility classification,
@@ -224,7 +226,15 @@ email entity extraction, the new API surface, and sandbox E2E adapters for Green
 Lever, Ashby, Workday and SmartRecruiters (detection, mapping, uploads, multi-step,
 validation errors, recovery, locks, approval gates, duplicate prevention — with real
 headless Chromium against local fixtures; no external site is touched and no real
-application is ever submitted).
+application is ever submitted) — **and the Phase 19 production suites**: SSRF-safe URL
+validation (redirect-hop re-checks, DNS rebinding), the AES-256-GCM credential vault
+(masked listings, tamper detection, fail-closed), schema versioning + validated
+backups/restore/retention, the 18-state application lifecycle (human-only approval,
+idempotent submissions, uncertain-submission human gate, forged-state refusal), health
+endpoints + diagnostics, the Groq circuit breaker (backoff + jitter), structured
+execution logs, eight more sandbox-verified ATS platforms (iCIMS, Taleo, Darwinbox,
+Zoho, SuccessFactors, Oracle, Eightfold, Phenom — 13 total), and the 25-step
+production acceptance scenario.
 
 ## Project structure
 
@@ -249,6 +259,14 @@ jobagent/
   interview_prep.py Phase 18 question bank, model answers, mock sessions, progress
   agents.py         Groq agent orchestration (10 agents, shared context, run history)
   email_sync.py     optional read-only email monitoring (10 categories + entities)
+  security.py       Phase 19 SSRF-safe URL validation, secret redaction, safe errors
+  credentials.py    Phase 19 AES-256-GCM encrypted credential vault
+  backup.py         Phase 19 validated backups, restore, retention
+  state_machine.py  Phase 19 formal 18-state lifecycle (approval gate, idempotency)
+  health.py         Phase 19 /health/live /health/ready + system diagnostics
+  llm_resilience.py Phase 19 circuit breaker + exponential backoff retries
+  execution_log.py  Phase 19 structured automation logs (error taxonomy)
+  server.py        FastAPI API + built dashboard (token middleware)
   search_profiles.py India-first saved search profiles
   enrich.py         deterministic India-first enrichment (salary/batch/CGPA/deadlines/fraud)
   eligibility.py    4-level eligibility engine (batch, CGPA, backlogs, experience)

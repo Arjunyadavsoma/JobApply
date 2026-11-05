@@ -25,7 +25,7 @@ from pydantic import BaseModel, Field
 
 from jobagent.config import DATA_DIR, cfg
 from jobagent.db import Job
-from jobagent.sources import ats, ats_more
+from jobagent.sources import ats
 from jobagent.sources.ats_more import _location_ok, _title_ok
 from jobagent.sources.common import html_to_text, log
 

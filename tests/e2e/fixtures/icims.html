@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>iCIMS Sandbox - Software Engineer I</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 700px; margin: 30px auto;
+           padding: 0 16px; color: #222; }
+    label { display: block; font-weight: 600; margin-top: 14px; font-size: 14px; }
+    input, select, textarea { width: 100%; padding: 8px; margin-top: 4px;
+           box-sizing: border-box; border: 1px solid #cfd7e0; border-radius: 4px; }
+    button, input[type='submit'] { margin-top: 20px; padding: 10px 20px; color: #fff;
+           border: 0; border-radius: 4px; cursor: pointer; font-weight: 600; }
+    .error, [role='alert'] { color: #c0392b; font-size: 13px; display: none; }
+    .step { border: 1px solid #e1e6eb; border-radius: 8px; padding: 20px; }
+    .confirmation { text-align: center; padding: 60px 20px; display: none; }
+    .confirmation h2 { color: #0a7f24; }
+</style>
+</head>
+<body>
+
+  <h1>iCIMS Careers Portal (sandbox)</h1>
+  <p>Software Engineer I - Sandbox Technologies India Pvt Ltd (Bengaluru)</p>
+  <form id="icims_form" class="iCIMS_JobPage" novalidate>
+    <table class="iCIMS_Table" role="presentation" width="100%">
+      <tr><td>
+
+      <label for="first_name">First Name <span style="color:#c0392b">*</span></label>
+      <input id="first_name" name="first_name" type="text" required />
+      <div class="error" id="first_name_error" role="alert">First Name is required</div>
+      <label for="last_name">Last Name <span style="color:#c0392b">*</span></label>
+      <input id="last_name" name="last_name" type="text" required />
+      <div class="error" id="last_name_error" role="alert">Last Name is required</div>
+      <label for="email">Email Address <span style="color:#c0392b">*</span></label>
+      <input id="email" name="email" type="email" required />
+      <div class="error" id="email_error" role="alert">A valid email is required</div>
+      <label for="phone">Phone (optional)</label>
+      <input id="phone" name="phone" type="tel" />
+
+      <label for="resume">Resume / CV <span style="color:#c0392b">*</span></label>
+      <input id="resume" name="resume" type="file" accept=".pdf,.doc,.docx" required />
+      <div class="error" id="resume_error" role="alert">Resume file is required</div>
+
+      <label for="notice">What is your notice period? <span style="color:#c0392b">*</span></label>
+      <select id="notice" name="notice_period" required>
+        <option value="">Select...</option>
+        <option value="immediate">Immediate</option>
+        <option value="15 days">15 days</option>
+        <option value="1 month">1 month</option>
+        <option value="2 months">2 months</option>
+      </select>
+      <label>Are you willing to relocate? <span style="color:#c0392b">*</span></label>
+      <input type="radio" id="reloc_yes" name="relocation" value="yes" /> <label for="reloc_yes" style="display:inline">Yes</label>
+      <input type="radio" id="reloc_no" name="relocation" value="no" /> <label for="reloc_no" style="display:inline">No</label>
+
+      <label style="font-weight:400">
+        <input type="checkbox" id="consent" name="data_consent" style="width:auto" />
+        I consent to the processing of my data for this application <span style="color:#c0392b">*</span>
+      </label>
+
+      </td></tr>
+      <tr><td>
+        <input type="submit" id="icims_submit" value="Submit Application" />
+        <div class="iCIMS_ErrorMsg" id="form_error" role="alert">Please correct the errors above.</div>
+      </td></tr>
+    </table>
+  </form>
+  <div class="confirmation" id="confirmation">
+    <h2>Application submitted successfully</h2>
+    <p>Your application reference number is <strong>ICIMS-SBX-2027-881</strong>.</p>
+  </div>
+
+  <script>
+  function show(selector) { var el = document.querySelector(selector); if (el) el.style.display = 'block'; }
+  function hide(selector) { var el = document.querySelector(selector); if (el) el.style.display = 'none'; }
+  function validateRequired(ids) {
+    var ok = true;
+    ids.forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el && !el.value) { ok = false; show('#' + id + '_error'); el.setAttribute('aria-invalid', 'true'); }
+    });
+    return ok;
+  }
+
+  document.getElementById('icims_submit').addEventListener('click', function(ev) {
+    ev.preventDefault();
+    if (!validateRequired(['first_name', 'last_name', 'email'])) return;
+    if (!document.getElementById('resume').files.length) { show('#resume_error'); return; }
+    hide('#icims_form'); show('#confirmation');
+  });
+</script>
+</body>
+</html>

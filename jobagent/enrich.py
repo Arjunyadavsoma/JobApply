@@ -287,7 +287,6 @@ def enrich(title: str, description: str, company: str = "", apply_url: str = "",
 
 def apply_to_job(job_id: str, facts: JobFacts) -> None:
     """Persist enrichment onto a jobs row (called after discovery and by `jobagent enrich`)."""
-    import json as _json
 
     from jobagent import db
     db.update(job_id,

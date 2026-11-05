@@ -118,6 +118,38 @@ def _open_path(path: Path) -> None:
 
 # ---------------------------------------------------------------- health + stats
 
+@app.get("/health/live")
+def health_live() -> dict:
+    """Phase 19J: liveness — process is up, no dependency checks."""
+    from jobagent.health import liveness
+    return liveness()
+
+
+@app.get("/health/ready")
+def health_ready() -> dict:
+    """Phase 19J: readiness — DB reachable, schema present."""
+    from jobagent.health import readiness
+    out = readiness()
+    if out["status"] != "ok":
+        from fastapi.responses import JSONResponse
+        return JSONResponse(out, status_code=503)
+    return out
+
+
+@app.get("/api/system/status")
+def system_status() -> dict:
+    """Phase 19J: operational snapshot for the dashboard."""
+    from jobagent.health import system_status
+    return system_status()
+
+
+@app.get("/api/system/diagnostics")
+def system_diagnostics() -> dict:
+    """Phase 19J: deep diagnostics (DB integrity, Groq, browser, storage)."""
+    from jobagent.health import diagnostics
+    return diagnostics()
+
+
 @app.get("/api/health")
 def health() -> dict:
     """Phase 17.11: liveness + dependency report. The dashboard stays usable when
@@ -530,7 +562,6 @@ def resume_apply_session(job_id: str) -> dict:
 
 @app.get("/api/emails")
 def get_emails(unreviewed: bool = False) -> list[dict]:
-    from jobagent import email_sync
     rows = db.emails(unreviewed_only=unreviewed)
     out = []
     for r in rows:
@@ -578,25 +609,160 @@ def task_history(limit: int = 50) -> list[dict]:
 
 
 @app.post("/api/backup")
-def backup_now() -> dict:
-    """Snapshot the SQLite DB (WAL-safe). Returns the backup path."""
-    import sqlite3
-    from jobagent.config import DATA_DIR
-    from jobagent.db import DB_PATH
-    from datetime import datetime as _dt
-    backups = DATA_DIR / "backups"
-    backups.mkdir(parents=True, exist_ok=True)
-    dest = backups / f"jobs_{_dt.now().strftime('%Y%m%d_%H%M%S')}.db"
-    src = sqlite3.connect(DB_PATH)
+def backup_now(label: str = "") -> dict:
+    """Phase 19B: create a validated backup (integrity-checked + hashed)."""
+    from jobagent.backup import BackupError, create_backup
     try:
-        dst = sqlite3.connect(dest)
-        try:
-            src.backup(dst)
-        finally:
-            dst.close()
-    finally:
-        src.close()
-    return {"ok": True, "path": str(dest), "bytes": dest.stat().st_size}
+        info = create_backup(label=label)
+    except BackupError as exc:
+        raise HTTPException(500, str(exc))
+    return {"ok": True, **info.as_dict()}
+
+
+@app.get("/api/backup")
+def backup_list() -> dict:
+    """Phase 19B: all backups with integrity status (newest first)."""
+    from jobagent.backup import apply_retention, list_backups
+    apply_retention()  # prune per retention policy on every listing
+    backups = [b.as_dict() for b in list_backups()]
+    return {"ok": True, "backups": backups, "count": len(backups)}
+
+
+@app.get("/api/backup/{name}/verify")
+def backup_verify(name: str) -> dict:
+    """Phase 19B: re-validate one backup (integrity + hash)."""
+    from jobagent.backup import BackupError, verify_backup
+    try:
+        return {"ok": True, **verify_backup(name)}
+    except BackupError as exc:
+        raise HTTPException(404, str(exc))
+
+
+@app.post("/api/backup/{name}/restore")
+def backup_restore(name: str) -> dict:
+    """Phase 19B: restore a backup over the live DB.
+
+    Destructive: covered by the token middleware when configured, and it
+    always creates a pre-restore safety copy first.
+    """
+    from jobagent.backup import BackupError, restore_backup
+    try:
+        return restore_backup(name)
+    except BackupError as exc:
+        code = 404 if "not found" in str(exc) else 400
+        raise HTTPException(code, str(exc))
+
+
+# ------------------------------------------------------- credentials (19A-2)
+
+class CredentialIn(BaseModel):
+    name: str
+    provider: str
+    secret: str
+    note: str = ""
+
+
+class CredentialUpdateIn(BaseModel):
+    secret: str
+    note: str | None = None
+
+
+@app.get("/api/credentials")
+def credentials_list() -> list[dict]:
+    """Masked credential listing — secrets never leave the vault."""
+    from jobagent import credentials
+    return credentials.list_credentials()
+
+
+@app.post("/api/credentials")
+def credentials_add(body: CredentialIn) -> dict:
+    from jobagent import credentials
+    try:
+        return credentials.add_credential(
+            body.name, body.provider, body.secret, note=body.note)
+    except credentials.VaultError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.put("/api/credentials/{name}")
+def credentials_update(name: str, body: CredentialUpdateIn) -> dict:
+    from jobagent import credentials
+    try:
+        return credentials.update_credential(name, body.secret, note=body.note)
+    except credentials.VaultError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.post("/api/credentials/{name}/test")
+def credentials_test(name: str) -> dict:
+    from jobagent import credentials
+    try:
+        return credentials.test_credential(name)
+    except credentials.VaultError as exc:
+        raise HTTPException(404, str(exc))
+
+
+@app.post("/api/credentials/{name}/revoke")
+def credentials_revoke(name: str) -> dict:
+    from jobagent import credentials
+    try:
+        return credentials.revoke_credential(name)
+    except credentials.VaultError as exc:
+        raise HTTPException(400, str(exc))
+
+
+@app.delete("/api/credentials/{name}")
+def credentials_delete(name: str) -> dict:
+    from jobagent import credentials
+    try:
+        return credentials.delete_credential(name)
+    except credentials.VaultError as exc:
+        raise HTTPException(404, str(exc))
+
+
+# ------------------------------------------------------- state machine (19D)
+
+@app.get("/api/jobs/{job_id}/execution-logs")
+def execution_logs(job_id: str, limit: int = 200) -> list[dict]:
+    """Phase 19E: structured automation history for one job (redacted)."""
+    from jobagent import execution_log
+    return execution_log.logs_for_job(job_id, limit=min(limit, 500))
+
+
+@app.get("/api/applications/{job_id}/state")
+def application_state(job_id: str) -> dict:
+    """Current formal lifecycle state + full transition history."""
+    from jobagent import state_machine as sm
+    return {"job_id": job_id, "state": sm.current_state(job_id),
+            "history": sm.history(job_id)}
+
+
+@app.get("/api/applications/states")
+def application_state_counts() -> dict:
+    from jobagent import state_machine as sm
+    return {"ok": True, "counts": sm.state_counts(),
+            "states": sorted(sm.STATES)}
+
+
+class TransitionIn(BaseModel):
+    to_state: str
+    actor: str = "user"
+    note: str = ""
+    evidence: dict | None = None
+    idempotency_key: str | None = None
+
+
+@app.post("/api/applications/{job_id}/transition")
+def application_transition(job_id: str, body: TransitionIn) -> dict:
+    """Apply a lifecycle transition with full validation + audit."""
+    from jobagent import state_machine as sm
+    try:
+        result = sm.transition(job_id, body.to_state, actor=body.actor,
+                               evidence=body.evidence, note=body.note,
+                               idempotency_key=body.idempotency_key)
+        return {"ok": True, **result.as_dict()}
+    except sm.InvalidTransition as exc:
+        raise HTTPException(409, str(exc))
 
 
 @app.get("/api/jobs/{job_id}/resume.pdf")

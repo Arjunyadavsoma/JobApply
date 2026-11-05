@@ -20,7 +20,6 @@ submits on unapproved jobs, or invents a confirmation.
 """
 from __future__ import annotations
 
-import json
 import re
 from pathlib import Path
 from typing import Any

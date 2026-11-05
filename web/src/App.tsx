@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  BarChart3, Briefcase, Brain, CircleAlert, FileText, KanbanSquare, ListChecks, Search, Settings, User,
+  BarChart3, Briefcase, Brain, CircleAlert, FileText, KanbanSquare, ListChecks, Search, Settings, ShieldCheck, User,
 } from "lucide-react";
 import { api, type Config, type JobSummary, type Stats, type Task } from "./api";
 import { AnalyticsPage } from "./components/AnalyticsPage";
@@ -14,10 +14,11 @@ import { QueuePage } from "./components/QueuePage";
 import { ResumePage } from "./components/ResumePage";
 import { SearchPanel } from "./components/SearchPanel";
 import { SettingsPage } from "./components/SettingsPage";
+import { SystemPage } from "./components/SystemPage";
 import { TaskPanel } from "./components/TaskPanel";
 import { Card, ToastProvider } from "./components/ui";
 
-type Page = "jobs" | "queue" | "applications" | "analytics" | "assistant" | "resume" | "profile" | "settings";
+type Page = "jobs" | "queue" | "applications" | "analytics" | "assistant" | "resume" | "profile" | "system" | "settings";
 
 function StatCard({ label, value, tone }: { label: string; value: number; tone: string }) {
   return (
@@ -100,6 +101,7 @@ export default function App() {
     { id: "assistant", label: "AI Assistant", icon: <Brain className="size-4" /> },
     { id: "resume", label: "Resume Studio", icon: <FileText className="size-4" /> },
     { id: "profile", label: "My Profile", icon: <User className="size-4" /> },
+    { id: "system", label: "System", icon: <ShieldCheck className="size-4" /> },
     { id: "settings", label: "Settings", icon: <Settings className="size-4" /> },
   ];
 
@@ -189,6 +191,7 @@ export default function App() {
           </>
         )}
         {page === "profile" && <ProfilePage />}
+        {page === "system" && <SystemPage />}
         {page === "settings" && <SettingsPage />}
       </main>
 

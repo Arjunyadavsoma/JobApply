@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Oracle Recruiting Cloud Sandbox - Associate Developer</title>
+  <style>
+    body { font-family: system-ui, sans-serif; max-width: 700px; margin: 30px auto;
+           padding: 0 16px; color: #222; }
+    label { display: block; font-weight: 600; margin-top: 14px; font-size: 14px; }
+    input, select, textarea { width: 100%; padding: 8px; margin-top: 4px;
+           box-sizing: border-box; border: 1px solid #cfd7e0; border-radius: 4px; }
+    button, input[type='submit'] { margin-top: 20px; padding: 10px 20px; color: #fff;
+           border: 0; border-radius: 4px; cursor: pointer; font-weight: 600; }
+    .error, [role='alert'] { color: #c0392b; font-size: 13px; display: none; }
+    .step { border: 1px solid #e1e6eb; border-radius: 8px; padding: 20px; }
+    .confirmation { text-align: center; padding: 60px 20px; display: none; }
+    .confirmation h2 { color: #0a7f24; }
+</style>
+</head>
+<body>
+
+  <h1>Oracle Recruiting Cloud (sandbox)</h1>
+  <p>Associate Developer, 2027 Graduate Program - Sandbox Cloud India (Bengaluru)</p>
+  <form id="orc_form" data-oracle-candidate="applyFlow" class="oj-form step" novalidate>
+    <div id="step1" class="step">
+      <h3>Job Application - Step 1</h3>
+
+      <label for="first_name">First Name <span style="color:#c0392b">*</span></label>
+      <input id="first_name" name="first_name" type="text" required />
+      <div class="error" id="first_name_error" role="alert">First Name is required</div>
+      <label for="last_name">Last Name <span style="color:#c0392b">*</span></label>
+      <input id="last_name" name="last_name" type="text" required />
+      <div class="error" id="last_name_error" role="alert">Last Name is required</div>
+      <label for="email">Email Address <span style="color:#c0392b">*</span></label>
+      <input id="email" name="email" type="email" required />
+      <div class="error" id="email_error" role="alert">A valid email is required</div>
+      <label for="phone">Phone (optional)</label>
+      <input id="phone" name="phone" type="tel" />
+
+      <label for="country">Country of Residence <span style="color:#c0392b">*</span></label>
+      <select id="country" name="country" data-oci-country="residence" required>
+        <option value="">Select country</option>
+        <option value="India">India</option>
+        <option value="Other">Other</option>
+      </select>
+      <div class="error" id="country_error" role="alert">Country is required</div>
+      <button type="button" id="orc_next" data-component-id="NextButton"
+              style="background:#c74634">Next</button>
+    </div>
+    <div id="step2" class="step" style="display:none">
+      <h3>Job Application - Step 2</h3>
+
+      <label for="resume">Resume / CV <span style="color:#c0392b">*</span></label>
+      <input id="resume" name="resume" type="file" accept=".pdf,.doc,.docx" required />
+      <div class="error" id="resume_error" role="alert">Resume file is required</div>
+
+      <label for="notice">What is your notice period? <span style="color:#c0392b">*</span></label>
+      <select id="notice" name="notice_period" required>
+        <option value="">Select...</option>
+        <option value="immediate">Immediate</option>
+        <option value="15 days">15 days</option>
+        <option value="1 month">1 month</option>
+        <option value="2 months">2 months</option>
+      </select>
+      <label>Are you willing to relocate? <span style="color:#c0392b">*</span></label>
+      <input type="radio" id="reloc_yes" name="relocation" value="yes" /> <label for="reloc_yes" style="display:inline">Yes</label>
+      <input type="radio" id="reloc_no" name="relocation" value="no" /> <label for="reloc_no" style="display:inline">No</label>
+
+      <label style="font-weight:400">
+        <input type="checkbox" id="consent" name="data_consent" style="width:auto" />
+        I consent to the processing of my data for this application <span style="color:#c0392b">*</span>
+      </label>
+
+      <button type="submit" id="orc_submit" style="background:#0a7f24">Submit</button>
+    </div>
+    <div class="p_OraError error" id="orc_error" role="alert">Resolve the highlighted fields.</div>
+  </form>
+  <div class="confirmation" id="confirmation">
+    <h2>Application submitted successfully</h2>
+    <p>Submission confirmation ORC-SBX-55210. Check your email for details.</p>
+  </div>
+
+  <script>
+  function show(selector) { var el = document.querySelector(selector); if (el) el.style.display = 'block'; }
+  function hide(selector) { var el = document.querySelector(selector); if (el) el.style.display = 'none'; }
+  function validateRequired(ids) {
+    var ok = true;
+    ids.forEach(function(id) {
+      var el = document.getElementById(id);
+      if (el && !el.value) { ok = false; show('#' + id + '_error'); el.setAttribute('aria-invalid', 'true'); }
+    });
+    return ok;
+  }
+
+  document.getElementById('orc_next').addEventListener('click', function() {
+    if (!validateRequired(['first_name', 'last_name', 'email', 'country'])) { show('#orc_error'); return; }
+    hide('#step1'); show('#step2');
+  });
+  document.getElementById('orc_submit').addEventListener('click', function(ev) {
+    ev.preventDefault();
+    if (!document.getElementById('resume').files.length) { show('#resume_error'); return; }
+    hide('#orc_form'); show('#confirmation');
+  });
+</script>
+</body>
+</html>

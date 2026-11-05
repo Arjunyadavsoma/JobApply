@@ -15,7 +15,7 @@ from __future__ import annotations
 import json
 
 from jobagent import db
-from jobagent.llm import LLMError, structured, untrusted
+from jobagent.llm import structured, untrusted
 from jobagent.models import (ApplicationQualityCheck, CandidateProfile, FollowUpMessage,
                              InterviewPrep, Resume, ScreeningAnswer, SkillGapReport)
 from jobagent.profile import facts_for_forms, load as load_profile

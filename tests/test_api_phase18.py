@@ -38,10 +38,12 @@ def test_ats_matrix(client):
     r = client.get("/api/ats/matrix")
     assert r.status_code == 200
     matrix = {m["platform"]: m for m in r.json()}
-    assert len(matrix) == 13                    # every non-generic platform
+    # 13 flow-adapter platforms + 3 registry-only manual-handoff platforms (19C)
+    assert len(matrix) == 16
     assert matrix["greenhouse"]["tested"] is True
-    assert matrix["icims"]["tested"] is False
-    assert "best-effort" in matrix["icims"]["status"]
+    assert matrix["icims"]["tested"] is True          # promoted in Phase 19C
+    assert matrix["icims"]["support_level"] == "SANDBOX_VERIFIED"
+    assert matrix["linkedin"]["support_level"] == "MANUAL_HANDOFF"
 
 
 def test_readiness_endpoint(client, job):

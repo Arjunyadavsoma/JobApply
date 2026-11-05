@@ -182,21 +182,24 @@ SMARTRECRUITERS = ATSAdapter(
 )
 
 ICIMS = ATSAdapter(
-    "icims", "iCIMS", tested=False,
+    "icims", "iCIMS", tested=True,   # sandbox fixture E2E passed (Phase 19C)
+    page_markers=(".iCIMS_Table", "#icims_form", ".iCIMS_JobPage"),
     advance_selectors=("input[type='submit']", "button[type='submit']"),
     submit_text=re.compile(r"(submit|next|continue)", re.I),
     error_selectors=(".error", "[role='alert']", ".iCIMS_ErrorMsg"),
 )
 
 TALEO = ATSAdapter(
-    "taleo", "Oracle Taleo", tested=False,
+    "taleo", "Oracle Taleo", tested=True,   # sandbox fixture E2E passed (Phase 19C)
+    page_markers=("#taleo_form", ".taleo-candidate-gateway", "#errorMessages"),
     advance_selectors=("input#submit", "input[type='submit']", "button[type='submit']"),
     error_selectors=(".error", "#errorMessages", "[role='alert']"),
     wait_after_load_ms=3500,
 )
 
 DARWINBOX = ATSAdapter(
-    "darwinbox", "Darwinbox", tested=False,
+    "darwinbox", "Darwinbox", tested=True,   # sandbox fixture E2E passed (Phase 19C)
+    page_markers=("[data-db-form]", ".dbx-apply-form"),
     advance_selectors=("button[type='submit']",),
     error_selectors=("[role='alert']", ".error"),
     # India-native ATS: most application flows live behind a login the candidate
@@ -204,34 +207,39 @@ DARWINBOX = ATSAdapter(
 )
 
 SUCCESSFACTORS = ATSAdapter(
-    "successfactors", "SAP SuccessFactors", tested=False,
+    "successfactors", "SAP SuccessFactors", tested=True,   # sandbox fixture E2E passed (Phase 19C)
+    page_markers=("[data-sap-ui='applicationForm']", ".sapMMsgStrip"),
     advance_selectors=("button[type='submit']", "#nextBtn", "input[type='submit']"),
     error_selectors=("[aria-invalid='true']", "[role='alert']", ".sapMMsgStrip"),
     wait_after_load_ms=4000,
 )
 
 ORACLE_RECRUITING = ATSAdapter(
-    "oracle_recruiting", "Oracle Recruiting Cloud", tested=False,
+    "oracle_recruiting", "Oracle Recruiting Cloud", tested=True,   # sandbox fixture E2E passed (Phase 19C)
+    page_markers=("[data-oracle-candidate]", ".oj-form"),
     advance_selectors=("button[type='submit']", "[data-component-id*='NextButton']"),
     error_selectors=("[role='alert']", ".p_OraError"),
     wait_after_load_ms=4000,
 )
 
 ZOHO_RECRUIT = ATSAdapter(
-    "zoho_recruit", "Zoho Recruit / Freshteam", tested=False,
+    "zoho_recruit", "Zoho Recruit / Freshteam", tested=True,   # sandbox fixture E2E passed (Phase 19C)
+    page_markers=("#zoho_form", ".zc-formbody", ".zcformbody"),
     advance_selectors=("button[type='submit']", "#submit"),
     error_selectors=(".error", "[role='alert']"),
 )
 
 EIGHTFOLD = ATSAdapter(
-    "eightfold", "Eightfold AI", tested=False,
+    "eightfold", "Eightfold AI", tested=True,   # sandbox fixture E2E passed (Phase 19C)
+    page_markers=("#ef_form", ".ef-application-form"),
     # resume-first flow: upload, review parsed fields, continue
     advance_selectors=("button[type='submit']",),
     error_selectors=("[aria-invalid='true']", "[role='alert']"),
 )
 
 PHENOM = ATSAdapter(
-    "phenom", "Phenom People", tested=False,
+    "phenom", "Phenom People", tested=True,   # sandbox fixture E2E passed (Phase 19C)
+    page_markers=(".ph-apply-button", ".ph-landing"),
     # career-site wrapper: apply usually redirects to an underlying ATS; detection
     # follows the redirect, so this adapter is mostly a pass-through.
     advance_selectors=("button[type='submit']",),
@@ -279,16 +287,45 @@ def detect_adapter(url: str, page: Page | None = None) -> tuple[ATSAdapter, dict
 
 
 def compatibility_matrix() -> list[dict[str, Any]]:
-    """What the dashboard and PHASE_18_REPORT show. 'tested' = sandbox fixture passed."""
+    """Phase 19C formal support levels (never inflated):
+
+    - SANDBOX_VERIFIED : the local fixture passed the full Playwright E2E
+                         suite (form detection, mapping, upload, multi-step,
+                         validation, recovery). NOT a live-platform claim.
+    - DETECTION_ONLY   : URL + on-page markers detected; the semantic engine
+                         drives best-effort but no sandbox evidence exists.
+    - MANUAL_HANDOFF   : apply flow is behind a login the candidate owns
+                         (LinkedIn/Naukri/Instahyre/Darwinbox portal) — the
+                         agent prepares everything, the user submits.
+    - VERIFIED         : reserved for live-platform evidence with a real
+                         authorized account. NONE is claimed today.
+    """
+    manual_handoff = {"linkedin", "naukri", "instahyre"}
     out = []
     for a in ADAPTERS.values():
         if a.key == "generic":
             continue
         q = registry_quirks(a.key)
+        if a.key in manual_handoff:
+            level, status = "MANUAL_HANDOFF", "login-walled: agent prepares, user submits"
+        elif a.tested:
+            level, status = "SANDBOX_VERIFIED", "sandbox E2E suite passed (local fixtures)"
+        else:
+            level, status = "DETECTION_ONLY", "detected; best-effort driver, no sandbox evidence"
         out.append({"platform": a.key, "name": a.name, "tested": a.tested,
+                    "support_level": level,
                     "multi_step": q.get("multi_step", False),
-                    "status": "tested (sandbox)" if a.tested else "detected; best-effort driver",
+                    "status": status,
                     "notes": q.get("notes", "")})
+    # registry-only platforms (no flow adapter yet): report them honestly
+    adapter_keys = {a.key for a in ADAPTERS.values()}
+    for key in ("linkedin", "naukri", "instahyre"):
+        if key not in adapter_keys:
+            out.append({"platform": key, "name": registry_quirks(key)["name"],
+                        "tested": False, "support_level": "MANUAL_HANDOFF",
+                        "multi_step": registry_quirks(key).get("multi_step", False),
+                        "status": "login-walled: agent prepares, user submits",
+                        "notes": registry_quirks(key).get("notes", "")})
     return out
 
 
@@ -442,14 +479,22 @@ class FlowDriver:
     # -- main loop -----------------------------------------------------------
     def run(self, submit: bool = False) -> FlowResult:
         from jobagent.execution import captcha_present, sensitive_fields
+        from jobagent import execution_log as xlog
 
         result = FlowResult(ok=False, final_url=self.page.url[:300])
         self.adapter.wait_ready(self.page)
+        xlog.log_action(job_id=self.job["id"], action="flow_start", result="ok",
+                        ats=self.adapter.key, step=0,
+                        detail=f"mode={'authorized' if submit else 'assisted'}")
 
         for step_no in range(1, self.max_steps + 1):
             if captcha_present(self.page):
                 result.stopped_reason = "CAPTCHA/bot protection present — never bypassed"
                 _screenshot(self.page, self.job["id"], f"stopped_{step_no}")
+                xlog.log_action(job_id=self.job["id"], action="captcha_stop",
+                                result="blocked", ats=self.adapter.key, step=step_no,
+                                error_class="captcha_wall",
+                                recovery="user must solve the challenge; agent stops")
                 break
 
             report = fill_step(self.page, self.job, self.profile, self.files,
@@ -457,14 +502,25 @@ class FlowDriver:
             report.step = step_no
             result.steps.append(report)
             result.needs_human.extend(report.needs_human)
+            xlog.log_action(
+                job_id=self.job["id"], action="fill_step", result="ok",
+                ats=self.adapter.key, step=step_no,
+                detail=f"filled={report.filled} auto={report.auto_filled} "
+                       f"flagged={report.flagged_for_review} "
+                       f"needs_human={len(report.needs_human)}")
             self._checkpoint(step_no, report)
 
             if report.validation_errors:
                 # validation errors block advancing: report and re-check once
-                page.wait_for_timeout(_wait_ms(1000))
+                self.page.wait_for_timeout(_wait_ms(1000))
                 still = self.adapter.validation_errors(self.page)
                 if still:
                     result.stopped_reason = f"validation errors: {'; '.join(still[:3])}"
+                    xlog.log_action(
+                        job_id=self.job["id"], action="validation_stop", result="blocked",
+                        ats=self.adapter.key, step=step_no, error_class="form_validation",
+                        detail="; ".join(still[:3]),
+                        recovery="correct the flagged fields, then resume from checkpoint")
                     break
 
             advance = self.adapter.advance_button(self.page)
@@ -502,15 +558,27 @@ class FlowDriver:
                         result.ok = True
                         result.confirmation = confirmation
                         result.stopped_reason = ""
+                        xlog.log_action(job_id=self.job["id"], action="submit",
+                                        result="ok", ats=self.adapter.key, step=step_no,
+                                        detail=f"platform confirmation: {confirmation[:120]}")
                     else:
                         # honesty rule: a click is not a submission. Only the
                         # platform's own confirmation counts (mode C records it).
                         result.ok = False
                         result.stopped_reason = ("submit clicked but no platform "
                                                  "confirmation detected — verify manually")
+                        xlog.log_action(job_id=self.job["id"], action="submit",
+                                        result="failed", ats=self.adapter.key, step=step_no,
+                                        error_class="unknown",
+                                        detail="no platform confirmation after click",
+                                        recovery="manual verification required before any retry")
                     report.advanced = "submit"
                 except PWError as e:
                     result.stopped_reason = f"submit click failed: {str(e).splitlines()[0]}"
+                    xlog.log_action(job_id=self.job["id"], action="submit",
+                                    result="failed", ats=self.adapter.key, step=step_no,
+                                    error_class=xlog.classify_exception(e),
+                                    detail=str(e), recovery="check page state, resume from checkpoint")
                 self._checkpoint(step_no, report)
                 break
 

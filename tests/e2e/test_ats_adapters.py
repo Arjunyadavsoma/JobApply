@@ -141,13 +141,18 @@ def test_adapter_detection_on_page(page, env, fixture, expected):
 def test_matrix_reports_tested_vs_untested():
     from jobagent.ats_flow import compatibility_matrix
     matrix = {m["platform"]: m for m in compatibility_matrix()}
+    # Phase 18: five platforms sandbox-verified
     for tested_key in ("greenhouse", "lever", "ashby", "workday", "smartrecruiters"):
         assert matrix[tested_key]["tested"] is True
-        assert matrix[tested_key]["status"] == "tested (sandbox)"
-    for untested in ("icims", "taleo", "darwinbox", "successfactors", "zoho_recruit",
+        assert matrix[tested_key]["support_level"] == "SANDBOX_VERIFIED"
+    # Phase 19C: the next eight platforms got fixtures + E2E and were promoted
+    for promoted in ("icims", "taleo", "darwinbox", "successfactors", "zoho_recruit",
                      "eightfold", "phenom", "oracle_recruiting"):
-        assert matrix[untested]["tested"] is False
-        assert "best-effort" in matrix[untested]["status"]
+        assert matrix[promoted]["tested"] is True
+        assert matrix[promoted]["support_level"] == "SANDBOX_VERIFIED"
+    # login-walled platforms are honestly declared, never claimed as automated
+    for manual in ("linkedin", "naukri", "instahyre"):
+        assert matrix[manual]["support_level"] == "MANUAL_HANDOFF"
 
 
 # ------------------------------------------------------------------ greenhouse flow

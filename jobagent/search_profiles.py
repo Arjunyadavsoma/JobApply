@@ -11,7 +11,6 @@ but lives in config.yaml as plain data - the user edits it, nothing is hardcoded
 """
 from __future__ import annotations
 
-from pathlib import Path
 from typing import Any
 
 from ruamel.yaml import YAML

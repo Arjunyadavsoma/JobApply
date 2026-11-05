@@ -15,9 +15,15 @@ import pytest
 REPO = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO))
 
+# Modules that capture config paths at import time are reloaded per test so a
+# fresh env gets a fresh module state. jobagent.security / llm_resilience have
+# no import-time state (pure functions) and are deliberately NOT reloaded —
+# reloading would invalidate direct class imports in their test files.
 RELOADABLE = ("jobagent.db", "jobagent.enrich", "jobagent.profile", "jobagent.prefit",
               "jobagent.llm", "jobagent.matcher", "jobagent.eligibility", "jobagent.analytics",
-              "jobagent.ai_services", "jobagent.tasks", "jobagent.server")
+              "jobagent.ai_services", "jobagent.tasks", "jobagent.server",
+              "jobagent.credentials", "jobagent.backup",
+              "jobagent.state_machine", "jobagent.health")
 
 
 @pytest.fixture()

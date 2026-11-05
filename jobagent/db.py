@@ -20,6 +20,15 @@ from jobagent.config import DATA_DIR
 
 DB_PATH = DATA_DIR / "jobs.db"
 
+# ---------------------------------------------------------------- versioning
+# Explicit schema version (Phase 19B). Bump when SCHEMA/EXTRA_TABLES change.
+#   1 = Phase 17/18 layout (all tables below, applied idempotently)
+#   2 = Phase 19: credentials + application_state/application_transitions
+# _migrate() stamps PRAGMA user_version after applying; a DB stamped with a
+# HIGHER version than the code refuses to run (downgrade protection).
+SCHEMA_VERSION = 2
+MIN_SUPPORTED_SCHEMA = 1
+
 # Full pipeline statuses. `tailored` = ready to apply.
 PIPELINE = ["new", "scored", "tailored", "applied", "assessment", "interview", "offer",
             "rejected", "withdrawn", "expired", "skipped", "dismissed", "error"]
@@ -287,8 +296,25 @@ class Job:
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Idempotent: creates missing tables and adds missing columns. Never drops data."""
+    # Downgrade guard: a future-version DB must not be touched by older code.
+    current = conn.execute("PRAGMA user_version").fetchone()[0]
+    if current > SCHEMA_VERSION:
+        raise RuntimeError(
+            f"Database schema v{current} is newer than this build (v{SCHEMA_VERSION}). "
+            "Update the application before using this database.")
     conn.executescript(SCHEMA)
     conn.executescript(EXTRA_TABLES)
+    # Phase 19 tables (safe to create unconditionally: IF NOT EXISTS)
+    try:
+        from jobagent.state_machine import SCHEMA as STATE_MACHINE_SCHEMA
+        conn.executescript(STATE_MACHINE_SCHEMA)
+    except (sqlite3.OperationalError, ImportError):  # retried on next connect
+        pass
+    try:
+        from jobagent.credentials import CREDENTIALS_TABLE
+        conn.execute(CREDENTIALS_TABLE)
+    except (sqlite3.OperationalError, ImportError):
+        pass
     for stmt in PERF_INDEXES.strip().split(";"):
         if stmt.strip():
             try:
@@ -303,6 +329,7 @@ def _migrate(conn: sqlite3.Connection) -> None:
     email_cols = {r["name"] for r in conn.execute("PRAGMA table_info(email_messages)")}
     if "entities" not in email_cols:
         conn.execute("ALTER TABLE email_messages ADD COLUMN entities TEXT")
+    conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
 
 
 # ---------------------------------------------------------------- verification + queue helpers

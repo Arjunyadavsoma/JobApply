@@ -18,7 +18,7 @@ import httpx
 
 from jobagent.config import cfg
 from jobagent.db import Job
-from jobagent.sources.common import html_to_text, log
+from jobagent.sources.common import html_to_text
 from jobagent.sources.location import keep_location
 
 JSON = {"Accept": "application/json", "Content-Type": "application/json"}

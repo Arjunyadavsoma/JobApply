@@ -259,9 +259,7 @@ export const api = {
   backup: () => post<{ ok: boolean; path: string; bytes: number }>("/api/backup"),
 
   // ---- Phase 18: application execution platform ----
-  atsMatrix: () =>
-    request<{ platform: string; name: string; tested: boolean; multi_step: boolean;
-              status: string; notes: string }[]>("/api/ats/matrix"),
+  atsMatrix: () => request<AtsMatrixRow[]>("/api/ats/matrix"),
   readiness: (jobId: string) =>
     request<ReadinessScore>(`/api/jobs/${jobId}/readiness`),
   prepare: (jobId: string) =>
@@ -297,9 +295,106 @@ export const api = {
               duration_ms: number; created_at: string }[]>(`/api/agents/history?limit=${limit}`),
   resumeSession: (jobId: string) =>
     post<{ resumed: boolean; step: number; ats: string; next_action: string }>(`/api/jobs/${jobId}/apply/resume-session`),
+
+  // ---- Phase 19: system, credentials, backup, execution logs ----
+  healthLive: () => request<{ status: string; version: string; uptime_s: number }>("/health/live"),
+  healthReady: () => request<{ status: string; database: { ok: boolean; detail: string } }>("/health/ready"),
+  systemStatus: () => request<SystemStatus>("/api/system/status"),
+  diagnostics: () => request<Diagnostics>("/api/system/diagnostics"),
+  credentials: () => request<CredentialItem[]>("/api/credentials"),
+  addCredential: (body: { name: string; provider: string; secret: string; note?: string }) =>
+    post<{ ok: boolean }>("/api/credentials", body),
+  updateCredential: (name: string, secret: string) =>
+    request<{ ok: boolean }>(`/api/credentials/${encodeURIComponent(name)}`, {
+      method: "PUT", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ secret }),
+    }),
+  testCredential: (name: string) =>
+    post<{ ok: boolean; name: string; detail: string }>(`/api/credentials/${encodeURIComponent(name)}/test`),
+  revokeCredential: (name: string) =>
+    post<{ ok: boolean }>(`/api/credentials/${encodeURIComponent(name)}/revoke`),
+  deleteCredential: (name: string) =>
+    request<{ ok: boolean }>(`/api/credentials/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  backups: () => request<{ ok: boolean; backups: BackupInfo[]; count: number }>("/api/backup"),
+  createBackup: (label = "") => post<BackupInfo & { ok: boolean }>(`/api/backup?label=${encodeURIComponent(label)}`),
+  restoreBackup: (name: string) =>
+    post<{ ok: boolean; restored_from: string }>(`/api/backup/${encodeURIComponent(name)}/restore`),
+  executionLogs: (jobId: string) =>
+    request<ExecutionLogEntry[]>(`/api/jobs/${encodeURIComponent(jobId)}/execution-logs`),
+  applicationState: (jobId: string) =>
+    request<{ job_id: string; state: string; history: unknown[] }>(`/api/applications/${encodeURIComponent(jobId)}/state`),
 };
 
 // ---- Phase 18 types ----
+
+// ---- Phase 19 types ----
+
+export interface SystemStatus {
+  version: string;
+  uptime_s: number;
+  jobs_total: number;
+  jobs_applied_pipeline: number;
+  submissions: number;
+  ai_calls: number;
+  background_tasks_running: number;
+  database: { ok: boolean; detail: string; jobs: number; latency_ms: number };
+  storage: { ok: boolean; free_gb: number | null; detail: string };
+}
+
+export interface Diagnostics {
+  status: string;
+  version: string;
+  uptime_s: number;
+  checks: Record<string, { ok: boolean; detail?: string; [k: string]: unknown }>;
+}
+
+export interface CredentialItem {
+  id: number;
+  name: string;
+  provider: string;
+  provider_label: string;
+  note: string;
+  masked: string;
+  created_at: string;
+  updated_at: string;
+  last_tested_at: string | null;
+  last_test_result: string | null;
+  revoked: boolean;
+}
+
+export interface AtsMatrixRow {
+  platform: string;
+  name: string;
+  tested: boolean;
+  support_level: "SANDBOX_VERIFIED" | "DETECTION_ONLY" | "MANUAL_HANDOFF" | "VERIFIED"
+    | "PARTIALLY_SUPPORTED" | "UNSUPPORTED";
+  multi_step: boolean;
+  status: string;
+  notes: string;
+}
+
+export interface BackupInfo {
+  name: string;
+  path: string;
+  bytes: number;
+  created_at: string;
+  sha256: string;
+  integrity: string;
+}
+
+export interface ExecutionLogEntry {
+  session_id: string;
+  worker_id: string;
+  ats: string;
+  step: number;
+  action: string;
+  result: string;
+  error_class: string | null;
+  detail: string | null;
+  recovery: string | null;
+  created_at: string;
+}
+
 
 export interface ReadinessScore {
   job_id: string;
