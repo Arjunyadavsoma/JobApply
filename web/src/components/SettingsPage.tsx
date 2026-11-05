@@ -133,10 +133,10 @@ export function SettingsPage() {
         </div>
       </Section>
 
-      <Section title="AI model" hint="Which LLM runs the scoring, tailoring and form filling. API keys live in .env.">
+      <Section title="AI model" hint="Which LLM runs the scoring, tailoring and form filling.">
         <div className="grid gap-4 md:grid-cols-2">
           <div>
-            <Label hint="subscription = Claude Code CLI login · api = ANTHROPIC_API_KEY · groq = GROQ_API_KEY">Backend</Label>
+            <Label hint="subscription = Claude Code CLI login · api = ANTHROPIC_API_KEY · groq = GROQ_API_KEY / GROQ_API_KEYS">Backend</Label>
             <select className={input} value={String(cfg.llm.backend ?? "subscription")}
               onChange={(e) => set((c) => { c.llm.backend = e.target.value; })}>
               <option value="subscription">Claude subscription (Claude Code CLI)</option>
@@ -174,7 +174,9 @@ export function SettingsPage() {
         </div>
         <p className="mt-2 text-xs text-slate-500">
           Lower effort = faster and uses less of your Claude plan. On Groq, these map to the
-          model's reasoning effort (gpt-oss models only).
+          model's reasoning effort (gpt-oss models only). Add several Groq keys
+          (GROQ_API_KEYS=key1,key2 in .env, or System → Credential Manager) and they rotate
+          automatically — a rate-limited key rests while the others keep working.
         </p>
       </Section>
 

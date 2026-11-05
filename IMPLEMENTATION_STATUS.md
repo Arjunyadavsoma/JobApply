@@ -3,7 +3,7 @@
 Live progress file for the JobApply platform transformation. Updated at the end of every
 implementation phase. Nothing is marked done that hasn't been tested.
 
-**Last updated:** 2026-11-05 (Phase 19) · branch `main` · test suite: **419 passed**
+**Last updated:** 2026-11-05 (Phase 19K) · branch `main` · test suite: **451 passed**
 (363 offline + 56 sandbox-E2E; live-adapter tests opt-in; see docs/PHASE_19_TEST_REPORT.md)
 
 ---
@@ -381,6 +381,29 @@ E2E, Docker smoke), non-root Dockerfile, 25-step production acceptance test.
 Fixed real bugs: registry double-slash signature matching, company-intel
 crash without LLM key, state-machine approval bypass via forged rows.
 
+### Phase 19K — multiple Groq API keys + rotation (anti rate-limit) ✅
+
+- `jobagent/groq_keys.py`: thread-safe key pool combining `GROQ_API_KEYS`
+  (comma/semicolon/newline) + `GROQ_API_KEY` + every non-revoked `groq`
+  credential from the encrypted vault (dedup by secret, env wins).
+- Round-robin per call; **429** rests the key using the server's `retry-after`
+  header (default 60 s, 1 s floor, 15 min cap, doubling on consecutive hits)
+  while other keys serve; **401/403** disables the key until an operator reset
+  (disabled keys are never retried — no quota burn, no log spam).
+- All keys cooling → bounded wait (`llm.key_wait_seconds`, 30 s) for the
+  soonest key, then an honest actionable error (never a hang).
+- Per-key OpenAI clients (`max_retries=0` so rotation sees 429s immediately);
+  key-level errors are `pass_through` in `call_with_resilience` — they rotate
+  without tripping the provider circuit breaker (verified by test).
+- New API: `GET /api/llm/keys` (masked status + per-key stats),
+  `POST /api/llm/keys/reset`; credential CRUD hot-reloads the pool (no restart).
+  `/api/health` + diagnostics now report `keys_total/active/cooling/disabled`.
+- Dashboard: "Groq key rotation" card in System → Credential Manager (live
+  states, 429 counters, cooldown countdowns, reset button).
+- Tests: `tests/test_groq_keys.py` — 32 offline tests (parsing, dedup, vault,
+  rotation fairness, cooldown escalation/caps, disable/reset, bounded waits,
+  breaker isolation, endpoint masking, live reload). Suite: 451 passed.
+
 ### Carried limitations
 
 1. **Multi-user isolation** — the product is a single-user, local-first tool (one SQLite
@@ -407,10 +430,11 @@ crash without LLM key, state-machine approval bypass via forged rows.
 
 ```bash
 pip install -r requirements.txt pytest pytest-httpserver
-GROQ_API_KEY=gsk_dummy python -m pytest tests/ -q --ignore=tests/e2e/test_live_adapters.py   # 419 offline tests
+GROQ_API_KEY=gsk_dummy python -m pytest tests/ -q --ignore=tests/e2e/test_live_adapters.py   # 451 offline tests
 GROQ_API_KEY=gsk_dummy python -m pytest tests/e2e/ -m e2e -q   # 56 sandbox browser tests
 GROQ_API_KEY=gsk_real_key python -m pytest scripts/test_groq_backend.py  # real Groq smoke
 cd web && npm ci && npx tsc -p . --noEmit && npm run build
 python -m jobagent init && python -m jobagent web      # dashboard at :8600
 curl http://127.0.0.1:8600/health/live                  # liveness
+curl http://127.0.0.1:8600/api/llm/keys                 # rotation pool status (masked)
 ```

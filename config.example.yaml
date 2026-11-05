@@ -126,6 +126,14 @@ llm:
   # groq_base_url: https://api.groq.com/openai/v1   # override for another OpenAI-compatible provider
   reasoning_effort: medium        # low | medium | high (gpt-oss models)
   max_requests_per_day: 0         # 0 = unlimited; set a cap to protect your quota
+  # --- Multiple keys + rotation (Phase 19K) ---
+  # Keys come from GROQ_API_KEYS (comma-separated) + GROQ_API_KEY in .env and
+  # every non-revoked "groq" credential in the vault. Round-robin per call;
+  # a 429 rests that key while the others serve; a 401/403 disables it
+  # (System -> Credential Manager shows live status and a reset button).
+  key_cooldown_seconds: 60        # rest after a 429 without a retry-after header
+  key_cooldown_max_seconds: 900   # hard cap for any cooldown
+  key_wait_seconds: 30            # max time a call waits when ALL keys are cooling
   # claude_cli: "C:/path/to/claude.exe"   # subscription backend only; auto-detected
   # Effort per task (Claude levels; on Groq gpt-oss these map to reasoning_effort low/medium/high)
   score_effort: low

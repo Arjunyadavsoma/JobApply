@@ -153,6 +153,31 @@ The defaults ship tuned for a B.Tech CSE (AI & ML) 2027 fresher in Hyderabad (AI
 roles, ₹6+ LPA, open to Bengaluru/Pune/Chennai/Mumbai/Gurugram/Noida + remote India). Everything
 is editable — profile, keywords, locations — none of it is a hardcoded rule.
 
+### Multiple Groq keys + automatic rotation (anti rate-limit)
+
+Groq's free tier rate-limits a single key quickly during scoring or batch runs. The agent
+supports **any number of keys** and rotates them on every call:
+
+```bash
+# .env — commas (or semicolons / newlines) all work
+GROQ_API_KEYS=gsk_key_one,gsk_key_two,gsk_key_three
+```
+
+- Keys are combined from `GROQ_API_KEYS` + `GROQ_API_KEY` + every non-revoked `groq`
+  credential in **System → Credential Manager** (AES-256-GCM encrypted vault). Duplicates
+  are removed automatically; vault changes apply live, no restart.
+- **Round-robin per call** spreads load evenly across keys.
+- **429 rate limit:** that key rests for the server's `retry-after` window (default 60 s,
+  capped at 15 min; back-to-back 429s double the rest) while the other keys keep serving.
+  Per-key 429s never trip the provider circuit breaker.
+- **401/403 (bad key):** the key is disabled until you fix/remove it — a disabled key is
+  never retried, so it can't burn quota or spam logs.
+- **All keys cooling:** the call waits (up to `llm.key_wait_seconds`, default 30 s) for the
+  soonest key, then fails with an honest message instead of hanging.
+- Live status (masked keys, per-key request/429 stats, cooldowns) and a
+  **Reset cooldowns** button: **System → Credential Manager → Groq key rotation**.
+  The API exposes the same at `GET /api/llm/keys` and `POST /api/llm/keys/reset`.
+
 ## Using it
 
 1. **Jobs → Search.** Optionally score the new jobs right away (~5-10 s per job on Groq).
@@ -203,7 +228,7 @@ suite, the TypeScript check, the dashboard build and the Docker build on every p
 
 ```bash
 pip install -r requirements.txt pytest pytest-httpserver
-GROQ_API_KEY=gsk_dummy python -m pytest tests/ -q --ignore=tests/e2e/test_live_adapters.py  # 419 tests (offline + sandbox E2E)
+GROQ_API_KEY=gsk_dummy python -m pytest tests/ -q --ignore=tests/e2e/test_live_adapters.py  # 451 tests (offline + sandbox E2E)
 python -m pytest tests/e2e/ -m e2e -q      # 56 sandbox browser tests (local fixtures, real Chromium)
 python -m pytest tests/e2e/test_live_adapters.py -m live --live -q # live public-API tests (read-only, opt-in)
 cd web && npm ci && npx tsc --noEmit && npm run build              # frontend gates
@@ -233,8 +258,12 @@ backups/restore/retention, the 18-state application lifecycle (human-only approv
 idempotent submissions, uncertain-submission human gate, forged-state refusal), health
 endpoints + diagnostics, the Groq circuit breaker (backoff + jitter), structured
 execution logs, eight more sandbox-verified ATS platforms (iCIMS, Taleo, Darwinbox,
-Zoho, SuccessFactors, Oracle, Eightfold, Phenom — 13 total), and the 25-step
-production acceptance scenario.
+Zoho, SuccessFactors, Oracle, Eightfold, Phenom — 13 total), the 25-step
+production acceptance scenario — **and the Phase 19K rotation suite**: multi-key parsing,
+vault-sourced keys, round-robin distribution, retry-after cooldowns with escalation and
+caps, auth-failure disabling, bounded all-cooling waits, per-key client isolation,
+429-rotation that leaves the provider circuit breaker closed, masked status endpoints,
+live pool reloads after vault changes.
 
 ## Project structure
 
@@ -261,6 +290,8 @@ jobagent/
   email_sync.py     optional read-only email monitoring (10 categories + entities)
   security.py       Phase 19 SSRF-safe URL validation, secret redaction, safe errors
   credentials.py    Phase 19 AES-256-GCM encrypted credential vault
+  groq_keys.py      Phase 19K multi-key Groq pool: round-robin rotation, per-key
+                    429 cooldowns (retry-after), auth-failure disable, masked status
   backup.py         Phase 19 validated backups, restore, retention
   state_machine.py  Phase 19 formal 18-state lifecycle (approval gate, idempotency)
   health.py         Phase 19 /health/live /health/ready + system diagnostics

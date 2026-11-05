@@ -49,11 +49,17 @@ def groq(monkeypatch, env):
     monkeypatch.setattr(llm, "_groq_model_name", lambda: "openai/gpt-oss-120b")
     monkeypatch.setattr(llm, "_groq_fallback_model", lambda: None)
     monkeypatch.setenv("GROQ_API_KEY", "gsk_test")
+    # Phase 19K: a single-key pool + an injectable fake client per key.
+    from jobagent import groq_keys
+    fake_pool = groq_keys.GroqKeyPool(
+        [groq_keys.GroqKeyHandle(secret="gsk_test", source="env:GROQ_API_KEY")])
+    monkeypatch.setattr(groq_keys, "_POOL", fake_pool)
     holder = SimpleNamespace(fake=None)
     def _install(responses):
         holder.fake = FakeCompletions(responses)
-        monkeypatch.setattr(llm, "_groq_client",
-                            lambda: SimpleNamespace(chat=SimpleNamespace(completions=holder.fake)))
+        monkeypatch.setattr(llm, "_client_for",
+                            lambda key: SimpleNamespace(chat=SimpleNamespace(completions=holder.fake)))
+    _install.holder = holder
     return _install
 
 
@@ -84,7 +90,7 @@ def test_json_mode_fallback_when_schema_rejected(groq):
     out = llm.structured(MatchResult, system="s", content="c", effort="low", task="score")
     assert out.score == 82
     # second call used json_object mode
-    assert llm._groq_client().chat.completions.calls[-1]["response_format"]["type"] == "json_object"
+    assert groq.holder.fake.calls[-1]["response_format"]["type"] == "json_object"
 
 
 def test_code_fence_tolerated(groq):
@@ -101,7 +107,7 @@ def test_fallback_model_used_on_bad_json(groq, monkeypatch):
           _resp(_good_payload(), model="openai/gpt-oss-20b")])
     out = llm.structured(MatchResult, system="s", content="c", effort="low", task="score")
     assert out.score == 82
-    assert llm._groq_client().chat.completions.calls[-1]["model"] == "openai/gpt-oss-20b"
+    assert groq.holder.fake.calls[-1]["model"] == "openai/gpt-oss-20b"
 
 
 def test_invalid_schema_raises_llmerror(groq):

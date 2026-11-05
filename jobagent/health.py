@@ -90,31 +90,48 @@ def check_db_integrity() -> dict[str, Any]:
 
 
 def check_groq() -> dict[str, Any]:
-    """Groq connectivity — only when a key is configured (redacted result)."""
+    """Groq connectivity — only when a key is configured (redacted result).
+
+    Phase 19K: reports the whole key pool. The live probe uses the next key
+    in rotation, so a pool with several keys is exercised, not just key #1.
+    """
     from jobagent.security import redact_secrets
-    import os
-    key = os.environ.get("GROQ_API_KEY", "").strip()
-    if not key:
-        try:
-            from jobagent import credentials
-            key = credentials.resolve_api_key("GROQ_API_KEY", "groq-main") or ""
-        except Exception:  # noqa: BLE001 — vault optional here
-            key = ""
-    if not key:
+    from jobagent import groq_keys
+
+    pool = groq_keys.pool()
+    st = pool.status()
+    if st["total"] == 0:
         return {"ok": False, "configured": False,
-                "detail": "no Groq API key configured"}
+                "detail": "no Groq API key configured "
+                          "(GROQ_API_KEY / GROQ_API_KEYS / credential vault)"}
+
+    key = pool.acquire()
     try:
         import httpx
         started = time.time()
         with httpx.Client(timeout=8) as http:
             resp = http.get("https://api.groq.com/openai/v1/models",
-                            headers={"Authorization": f"Bearer {key}"})
-        return {"ok": resp.status_code == 200, "configured": True,
+                            headers={"Authorization": f"Bearer {key.secret}"})
+        ok = resp.status_code == 200
+        if resp.status_code in (401, 403):
+            pool.report_auth_failure(key, f"HTTP {resp.status_code}")
+        elif resp.status_code == 429:
+            pool.report_rate_limited(
+                key, groq_keys.retry_after_seconds(
+                    Exception(),  # no headers to parse — use the default cooldown
+                    default=60.0))
+        else:
+            pool.report_success(key)
+        return {"ok": ok, "configured": True,
                 "detail": f"HTTP {resp.status_code}",
+                "keys_total": st["total"], "keys_active": st["active"],
+                "keys_cooling": st["cooling"], "keys_disabled": st["disabled"],
                 "latency_ms": round((time.time() - started) * 1000, 1)}
     except Exception as exc:  # noqa: BLE001 — network errors expected
         return {"ok": False, "configured": True,
-                "detail": redact_secrets(type(exc).__name__)}
+                "detail": redact_secrets(type(exc).__name__),
+                "keys_total": st["total"], "keys_active": st["active"],
+                "keys_cooling": st["cooling"], "keys_disabled": st["disabled"]}
 
 
 def check_browser() -> dict[str, Any]:

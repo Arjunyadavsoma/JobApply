@@ -315,6 +315,9 @@ export const api = {
     post<{ ok: boolean }>(`/api/credentials/${encodeURIComponent(name)}/revoke`),
   deleteCredential: (name: string) =>
     request<{ ok: boolean }>(`/api/credentials/${encodeURIComponent(name)}`, { method: "DELETE" }),
+  llmKeys: () => request<GroqKeyPoolStatus>("/api/llm/keys"),
+  resetLlmKeys: () =>
+    post<{ ok: boolean; keys: number; status: GroqKeyPoolStatus }>("/api/llm/keys/reset"),
   backups: () => request<{ ok: boolean; backups: BackupInfo[]; count: number }>("/api/backup"),
   createBackup: (label = "") => post<BackupInfo & { ok: boolean }>(`/api/backup?label=${encodeURIComponent(label)}`),
   restoreBackup: (name: string) =>
@@ -360,6 +363,29 @@ export interface CredentialItem {
   last_tested_at: string | null;
   last_test_result: string | null;
   revoked: boolean;
+}
+
+export interface GroqKeyStatus {
+  id: string;
+  masked: string;
+  source: string;
+  state: "active" | "cooling" | "disabled";
+  cooldown_s_remaining: number;
+  failure_reason: string;
+  requests: number;
+  successes: number;
+  rate_limited: number;
+  auth_failures: number;
+  last_used_at: string | null;
+}
+
+export interface GroqKeyPoolStatus {
+  rotation: string;
+  total: number;
+  active: number;
+  cooling: number;
+  disabled: number;
+  keys: GroqKeyStatus[];
 }
 
 export interface AtsMatrixRow {

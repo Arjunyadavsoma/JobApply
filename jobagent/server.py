@@ -155,8 +155,9 @@ def health() -> dict:
     """Phase 17.11: liveness + dependency report. The dashboard stays usable when
     Groq or a source is down - this endpoint shows what is degraded, not just up/down."""
     from jobagent.sources import source_health
+    from jobagent import groq_keys
     llm_backend = cfg("llm.backend", "")
-    groq_key = bool(os.environ.get("GROQ_API_KEY"))
+    pool_state = groq_keys.pool_status()
     sources = source_health()
     degraded = [s for s, v in sources.items()
                 if v.get("last_error") and str(v.get("last_run")) >= db.now()[:10]]
@@ -164,11 +165,16 @@ def health() -> dict:
         "ok": True,
         "status": "ok",
         "time": db.now(),
-        "llm": {"backend": llm_backend, "groq_key_present": groq_key},
+        "llm": {"backend": llm_backend,
+                "groq_key_present": pool_state["total"] > 0,
+                "groq_keys": {"total": pool_state["total"],
+                              "active": pool_state["active"],
+                              "cooling": pool_state["cooling"],
+                              "disabled": pool_state["disabled"]}},
         "db": {"jobs": db.stats()["total"], "writable": True},
         "sources": {"tracked": len(sources), "degraded_today": degraded},
         "task_running": bool(tasks.current() and tasks.current().get("running")),
-        "version": "17.0",
+        "version": "19.1",
     }
 
 
@@ -667,6 +673,13 @@ class CredentialUpdateIn(BaseModel):
     note: str | None = None
 
 
+def _reload_key_pool_if_groq(provider: str) -> None:
+    """Vault changes must reach the rotation pool without a restart."""
+    if provider == "groq":
+        from jobagent import groq_keys
+        groq_keys.reload_pool()
+
+
 @app.get("/api/credentials")
 def credentials_list() -> list[dict]:
     """Masked credential listing — secrets never leave the vault."""
@@ -678,19 +691,23 @@ def credentials_list() -> list[dict]:
 def credentials_add(body: CredentialIn) -> dict:
     from jobagent import credentials
     try:
-        return credentials.add_credential(
+        out = credentials.add_credential(
             body.name, body.provider, body.secret, note=body.note)
     except credentials.VaultError as exc:
         raise HTTPException(400, str(exc))
+    _reload_key_pool_if_groq(body.provider)
+    return out
 
 
 @app.put("/api/credentials/{name}")
 def credentials_update(name: str, body: CredentialUpdateIn) -> dict:
     from jobagent import credentials
     try:
-        return credentials.update_credential(name, body.secret, note=body.note)
+        out = credentials.update_credential(name, body.secret, note=body.note)
     except credentials.VaultError as exc:
         raise HTTPException(400, str(exc))
+    _reload_key_pool_if_groq(_provider_of(name))
+    return out
 
 
 @app.post("/api/credentials/{name}/test")
@@ -705,19 +722,52 @@ def credentials_test(name: str) -> dict:
 @app.post("/api/credentials/{name}/revoke")
 def credentials_revoke(name: str) -> dict:
     from jobagent import credentials
+    provider = _provider_of(name)          # before the row is flagged
     try:
-        return credentials.revoke_credential(name)
+        out = credentials.revoke_credential(name)
     except credentials.VaultError as exc:
         raise HTTPException(400, str(exc))
+    _reload_key_pool_if_groq(provider)
+    return out
 
 
 @app.delete("/api/credentials/{name}")
 def credentials_delete(name: str) -> dict:
     from jobagent import credentials
+    provider = _provider_of(name)          # before the row is removed
     try:
-        return credentials.delete_credential(name)
+        out = credentials.delete_credential(name)
     except credentials.VaultError as exc:
         raise HTTPException(404, str(exc))
+    _reload_key_pool_if_groq(provider)
+    return out
+
+
+def _provider_of(name: str) -> str:
+    from jobagent import credentials
+    try:
+        for row in credentials.list_credentials():
+            if row["name"] == name:
+                return row["provider"]
+    except Exception:  # noqa: BLE001 — best effort only
+        pass
+    return ""
+
+
+# --------------------------------------------------- groq key rotation (19K)
+
+@app.get("/api/llm/keys")
+def llm_keys_status() -> dict:
+    """Live rotation-pool status: masked keys, states, stats. No secrets."""
+    from jobagent import groq_keys
+    return groq_keys.pool_status()
+
+
+@app.post("/api/llm/keys/reset")
+def llm_keys_reset() -> dict:
+    """Operator action: re-read all key sources and re-arm cooling/disabled keys."""
+    from jobagent import groq_keys
+    return groq_keys.reset_pool()
 
 
 # ------------------------------------------------------- state machine (19D)

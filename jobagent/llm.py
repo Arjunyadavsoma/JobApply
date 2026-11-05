@@ -4,7 +4,8 @@ Three backends (config `llm.backend`):
 - "subscription" (default): runs the Claude Code CLI in print mode, so calls use your Claude
   Pro/Max subscription login and count toward its usage limits. No API credits needed.
 - "api": Anthropic API with ANTHROPIC_API_KEY (pay-as-you-go API credits).
-- "groq": Groq API with GROQ_API_KEY (OpenAI-compatible endpoint, e.g. gpt-oss or llama models).
+- "groq": Groq API with one or more keys (GROQ_API_KEY / GROQ_API_KEYS or the
+  credential vault; OpenAI-compatible endpoint, e.g. gpt-oss or llama models).
   PDF attachments are sent as extracted text, since the Groq API takes no document blocks.
 
 Production hardening (all backends):
@@ -17,6 +18,12 @@ Production hardening (all backends):
 - circuit breaker + exponential backoff with jitter (llm_resilience) for the
   Groq backend: repeated failures fail fast during a cooldown instead of
   hammering the provider, then one probe re-closes the circuit
+- multiple-key rotation (Phase 19K): several Groq keys round-robin so no
+  single key gets rate-limited; a 429 rests that key (cooldown from
+  retry-after) while the others keep serving, a 401/403 disables it until
+  an operator resets. Per-key errors never trip the provider circuit.
+  Configure via GROQ_API_KEYS (comma-separated) in .env or store extra
+  "groq" credentials in System -> Credential Manager.
 """
 from __future__ import annotations
 
@@ -361,15 +368,26 @@ def _groq_fallback_model() -> str | None:
     return fb or None
 
 
-@lru_cache
-def _groq_client():
+# One cached OpenAI client per key (Phase 19K). max_retries=0: the SDK's
+# internal retry would silently sleep on 429s on the SAME key — rotation
+# must see the error immediately to switch keys. Transient provider errors
+# (connection, 5xx) are retried by our own backoff layer instead.
+_clients: dict[str, object] = {}
+_clients_lock = threading.Lock()
+
+
+def _client_for(key) -> "openai.OpenAI":
+    """Cached client bound to one pool key (never re-created per request)."""
     import openai
 
-    key = os.environ.get("GROQ_API_KEY")
-    if not key:
-        raise LLMError("GROQ_API_KEY is not set - add it to .env (get one at https://console.groq.com/keys).")
-    return openai.OpenAI(api_key=key, base_url=cfg("llm.groq_base_url", GROQ_BASE_URL),
-                         max_retries=3, timeout=600)
+    with _clients_lock:
+        client = _clients.get(key.id)
+        if client is None:
+            client = openai.OpenAI(api_key=key.secret,
+                                   base_url=cfg("llm.groq_base_url", GROQ_BASE_URL),
+                                   max_retries=0, timeout=600)
+            _clients[key.id] = client
+        return client
 
 
 def _pdf_text(p: Path) -> str:
@@ -432,11 +450,21 @@ def _extract_usage(response) -> tuple[int, int]:
     return int(getattr(u, "prompt_tokens", 0) or 0), int(getattr(u, "completion_tokens", 0) or 0)
 
 
-def _groq_create(kwargs: dict):
-    """One chat.completions call with strict structured outputs, then JSON-mode fallback."""
+def _groq_create(kwargs: dict, client=None):
+    """One chat.completions call with strict structured outputs, then JSON-mode fallback.
+
+    ``client`` is the per-key OpenAI client (Phase 19K); when omitted the
+    pool's next key is used.
+    """
     import openai
 
-    client = _groq_client()
+    if client is None:
+        from jobagent import groq_keys
+        key = groq_keys.pool().acquire()
+        if key is None:
+            raise LLMError("No Groq API key is available — add GROQ_API_KEY or "
+                           "GROQ_API_KEYS to .env, or store keys in the credential vault.")
+        client = _client_for(key)
     schema: type[T] = kwargs.pop("_schema")
     messages = kwargs["messages"]
     try:
@@ -464,7 +492,17 @@ def _groq_create(kwargs: dict):
 
 def _via_groq(schema: type[T], system: str, content: str, effort: str, max_tokens: int,
               pdfs: list[Path]) -> T:
+    """Groq call with key rotation (Phase 19K).
+
+    Each round picks the next available key from the pool. A 429 rests that
+    key (cooldown from the retry-after header) and rotates to the next one;
+    a 401/403 disables the key and rotates. Provider-level problems
+    (network, 5xx) retry with backoff behind the circuit breaker. When every
+    key is cooling the call waits (bounded by llm.key_wait_seconds) for the
+    soonest key instead of failing instantly.
+    """
     import openai
+    from jobagent import groq_keys
     from jobagent.llm_resilience import CircuitOpenError, call_with_resilience
 
     if pdfs:
@@ -477,62 +515,103 @@ def _via_groq(schema: type[T], system: str, content: str, effort: str, max_token
     if reasoning:
         kwargs["reasoning_effort"] = reasoning
 
-    # Transient provider errors retry with backoff+jitter behind the circuit
-    # breaker. Auth/validation errors are never retried (give_up_on).
-    transient = (openai.RateLimitError, openai.APIConnectionError,
-                 openai.InternalServerError)
-    fatal = (openai.AuthenticationError, openai.PermissionDeniedError,
-             openai.NotFoundError)
+    key_pool = groq_keys.pool()
+    if len(key_pool) == 0:
+        raise LLMError(
+            "No Groq API key configured - add GROQ_API_KEY (or several, comma-separated, "
+            "in GROQ_API_KEYS) to .env - get free keys at https://console.groq.com/keys - "
+            "or store extra keys in System -> Credential Manager (provider: groq).")
 
-    def _call():
-        return _groq_create({**kwargs, "_schema": schema})
+    # Key-level errors rotate (pass_through: never recorded on the provider
+    # breaker — a healthy key pool must not look like a down provider).
+    transient = (openai.APIConnectionError, openai.InternalServerError)
+    key_level = (openai.RateLimitError, openai.AuthenticationError,
+                 openai.PermissionDeniedError)
 
-    try:
-        response, data = call_with_resilience(
-            "groq", _call,
-            attempts=int(cfg("llm.retry_attempts", 3)) + 1,
-            base_delay=float(cfg("llm.retry_base_delay", 0.5)),
-            max_delay=float(cfg("llm.retry_max_delay", 8.0)),
-            retry_on=transient, give_up_on=fatal)
-    except CircuitOpenError as e:
-        raise LLMError(str(e)) from e
-    except openai.AuthenticationError as e:
-        raise LLMError("Groq auth failed - check GROQ_API_KEY in .env.") from e
-    except openai.PermissionDeniedError as e:
-        raise LLMError("Groq rejected the key (permission denied).") from e
-    except openai.NotFoundError as e:
-        raise LLMError("Groq model not found - check llm.model / GROQ_MODEL.") from e
-    except openai.RateLimitError as e:
-        raise LLMError("Rate limited by the Groq API even after retries; try again shortly.") from e
-    except openai.APIConnectionError as e:
-        raise LLMError("Could not reach the Groq API (network problem).") from e
-    except openai.APIStatusError as e:
-        raise LLMError(f"Groq API error {e.status_code}: {e.message}") from e
-    except (json.JSONDecodeError, ValidationError) as e:
-        fb = _groq_fallback_model()
-        if not fb or fb == model:
-            raise LLMError(f"Groq's output wasn't valid JSON for {schema.__name__}: {str(e)[:300]}") from e
-        # One retry on the fallback model, which often recovers from primary-model quirks.
-        response, data = _groq_create({"model": fb, **{k: v for k, v in kwargs.items() if k != "model"},
-                                       "_schema": schema})
-    except openai.BadRequestError as e:
-        msg = str(e)
-        fb = _groq_fallback_model()
-        if fb and fb != model and ("model" in msg.lower() or "context" in msg.lower()
-                                   or "token" in msg.lower()):
-            response, data = _groq_create({"model": fb, **{k: v for k, v in kwargs.items() if k != "model"},
-                                           "_schema": schema})
-        else:
-            raise LLMError(f"Groq rejected the request: {msg[:300]}") from e
+    # One round per key + one bounded wait-round when everything is cooling.
+    for _ in range(len(key_pool) + 1):
+        key = key_pool.acquire()
+        if key is None:
+            # every key cooling/disabled: wait for the soonest (bounded)
+            key = key_pool.wait_for_available(
+                timeout=float(cfg("llm.key_wait_seconds", 30)))
+            if key is None:
+                break
+        client = _client_for(key)
 
-    if not data and (response.choices[0].message.content or "").strip():
-        raise LLMError(f"Groq returned an empty answer for {schema.__name__}.")
-    if response.choices[0].finish_reason == "length":
-        raise LLMError("The model's answer was cut off (max_tokens); try a lower effort setting.")
-    try:
-        result = schema.model_validate(data)
-    except ValidationError as e:
-        raise LLMError(f"The model's output didn't match the schema: {e}") from e
-    pt, ct = _extract_usage(response)
-    _set_last_usage(getattr(response, "model", model) or model, pt, ct)
-    return result
+        def _call():
+            return _groq_create({**kwargs, "_schema": schema}, client=client)
+
+        try:
+            response, data = call_with_resilience(
+                "groq", _call,
+                attempts=int(cfg("llm.retry_attempts", 3)) + 1,
+                base_delay=float(cfg("llm.retry_base_delay", 0.5)),
+                max_delay=float(cfg("llm.retry_max_delay", 8.0)),
+                retry_on=transient, give_up_on=(openai.NotFoundError,),
+                pass_through=key_level)
+        except openai.RateLimitError as e:
+            rest = groq_keys.retry_after_seconds(
+                e, default=float(cfg("llm.key_cooldown_seconds", 60)),
+                cap=float(cfg("llm.key_cooldown_max_seconds", 900)))
+            key_pool.report_rate_limited(key, rest)
+            continue
+        except openai.AuthenticationError:
+            key_pool.report_auth_failure(key, "401 - key rejected")
+            continue
+        except openai.PermissionDeniedError:
+            key_pool.report_auth_failure(key, "403 - permission denied")
+            continue
+        except CircuitOpenError as e:
+            raise LLMError(str(e)) from e
+        except openai.NotFoundError as e:
+            raise LLMError("Groq model not found - check llm.model / GROQ_MODEL.") from e
+        except openai.APIConnectionError as e:
+            raise LLMError("Could not reach the Groq API (network problem).") from e
+        except openai.APIStatusError as e:
+            raise LLMError(f"Groq API error {e.status_code}: {e.message}") from e
+        except (json.JSONDecodeError, ValidationError) as e:
+            fb = _groq_fallback_model()
+            if not fb or fb == model:
+                raise LLMError(f"Groq's output wasn't valid JSON for {schema.__name__}: {str(e)[:300]}") from e
+            # One retry on the fallback model, same key.
+            response, data = _groq_create({"model": fb,
+                                           **{k: v for k, v in kwargs.items() if k != "model"},
+                                           "_schema": schema}, client=client)
+        except openai.BadRequestError as e:
+            msg = str(e)
+            fb = _groq_fallback_model()
+            if fb and fb != model and ("model" in msg.lower() or "context" in msg.lower()
+                                       or "token" in msg.lower()):
+                response, data = _groq_create({"model": fb,
+                                               **{k: v for k, v in kwargs.items() if k != "model"},
+                                               "_schema": schema}, client=client)
+            else:
+                raise LLMError(f"Groq rejected the request: {msg[:300]}") from e
+
+        key_pool.report_success(key)
+        if not data and (response.choices[0].message.content or "").strip():
+            raise LLMError(f"Groq returned an empty answer for {schema.__name__}.")
+        if response.choices[0].finish_reason == "length":
+            raise LLMError("The model's answer was cut off (max_tokens); try a lower effort setting.")
+        try:
+            result = schema.model_validate(data)
+        except ValidationError as e:
+            raise LLMError(f"The model's output didn't match the schema: {e}") from e
+        pt, ct = _extract_usage(response)
+        _set_last_usage(getattr(response, "model", model) or model, pt, ct)
+        return result
+
+    # Rotation exhausted: honest, actionable error from live pool state.
+    st = key_pool.status()
+    if st["active"] == 0 and st["cooling"] == 0 and st["disabled"] > 0:
+        raise LLMError(
+            f"All {st['total']} Groq keys were rejected by the API (auth failures). "
+            "Fix or remove the bad keys (System -> Credential Manager / .env), then use "
+            "'Reset key rotation' there to re-arm them.")
+    wait_s = key_pool.next_cooldown_remaining()
+    raise LLMError(
+        f"Every Groq key is rate-limited right now ({st['cooling']} cooling, "
+        f"{st['disabled']} disabled, {st['active']} active; next key free in ~{wait_s:.0f}s). "
+        "Add more keys to spread the load - GROQ_API_KEYS=key1,key2 in .env or extra "
+        "'groq' credentials in System -> Credential Manager.")

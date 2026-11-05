@@ -144,11 +144,18 @@ def call_with_resilience(provider: str, fn: Callable[[], T], *,
                          sleep: Callable[[float], None] = time.sleep,
                          retry_on: tuple[type[BaseException], ...] = (Exception,),
                          give_up_on: tuple[type[BaseException], ...] = (),
+                         pass_through: tuple[type[BaseException], ...] = (),
                          ) -> T:
     """Circuit breaker + backoff retry around one provider call.
 
     Success closes the circuit; exhaustion opens it via record_failure for
     each failed attempt. The breaker check happens BEFORE any attempt.
+
+    ``pass_through`` exceptions (Phase 19K): raised unchanged after ONE
+    attempt — not retried, not recorded on the provider breaker. Used for
+    per-key errors (429 rate limit, 401 bad key) that the caller handles by
+    rotating to another key: a healthy key pool must not trip the
+    provider-level circuit.
     """
     breaker = breaker_for(provider)
     breaker.check()
@@ -158,6 +165,8 @@ def call_with_resilience(provider: str, fn: Callable[[], T], *,
             result = fn()
             breaker.record_success()
             return result
+        except pass_through:
+            raise                      # key-level: rotation handles it, breaker untouched
         except give_up_on:
             breaker.record_failure()
             raise
@@ -167,4 +176,4 @@ def call_with_resilience(provider: str, fn: Callable[[], T], *,
 
     return retry_with_backoff(
         _once, attempts=attempts, base_delay=base_delay, max_delay=max_delay,
-        sleep=sleep, retry_on=retry_on, give_up_on=give_up_on)
+        sleep=sleep, retry_on=retry_on, give_up_on=give_up_on + pass_through)

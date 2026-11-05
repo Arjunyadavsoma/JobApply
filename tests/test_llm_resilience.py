@@ -207,11 +207,14 @@ class TestGroqPathUsesResilience:
 
     def test_open_circuit_fails_fast_before_client(self, env, monkeypatch):
         import openai
-        from jobagent import llm
+        from jobagent import llm, groq_keys
         from jobagent.llm_resilience import breaker_for
 
         monkeypatch.setenv("GROQ_API_KEY", "gsk_dummy_key_for_tests_12345")
-        llm._groq_client.cache_clear()
+        # Phase 19K: a one-key pool stands in for the real client source
+        monkeypatch.setattr(groq_keys, "_POOL", groq_keys.GroqKeyPool(
+            [groq_keys.GroqKeyHandle(secret="gsk_dummy_key_for_tests_12345",
+                                     source="env:GROQ_API_KEY")]))
         cb = breaker_for("groq")
         cb._force_state("open", failures=99, opened_at=time.monotonic())
 
@@ -221,7 +224,7 @@ class TestGroqPathUsesResilience:
         created = []
         monkeypatch.setattr(
             llm, "_groq_create",
-            lambda kw: created.append(1) or (_ for _ in ()).throw(AssertionError("must not be called")))
+            lambda kw, client=None: created.append(1) or (_ for _ in ()).throw(AssertionError("must not be called")))
         monkeypatch.setattr(llm, "_groq_model_name", lambda: "test-model")
         with pytest.raises(llm.LLMError) as e:
             llm._via_groq(Out, "sys", "content", "low", 100, [])

@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import {
-  Activity, DatabaseBackup, HardDrive, KeyRound, Plus, RefreshCw, ShieldCheck, Table2,
+  Activity, DatabaseBackup, HardDrive, KeyRound, Plus, RefreshCw, RotateCw,
+  ShieldCheck, Table2,
 } from "lucide-react";
 import {
   api, type AtsMatrixRow, type BackupInfo, type CredentialItem, type Diagnostics,
-  type SystemStatus,
+  type GroqKeyPoolStatus, type GroqKeyStatus, type SystemStatus,
 } from "../api";
 import { Button, Card, useAction } from "./ui";
 
@@ -161,6 +162,102 @@ function AtsMatrixTab() {
 
 const PROVIDERS = ["groq", "openai", "anthropic", "gmail", "other"];
 
+const KEY_STATE_META: Record<GroqKeyStatus["state"], { label: string; cls: string }> = {
+  active: { label: "Active", cls: "bg-emerald-100 text-emerald-800" },
+  cooling: { label: "Cooling", cls: "bg-amber-100 text-amber-800" },
+  disabled: { label: "Disabled", cls: "bg-red-100 text-red-800" },
+};
+
+function KeyRotationCard({ onChanged }: { onChanged?: () => void }) {
+  const [pool, setPool] = useState<GroqKeyPoolStatus | null>(null);
+  const { run, busy } = useAction();
+
+  const refresh = useCallback(() => {
+    api.llmKeys().then(setPool).catch(() => setPool(null));
+  }, []);
+  useEffect(refresh, [refresh]);
+
+  return (
+    <Card className="p-5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <RotateCw className="size-4 text-blue-600" />
+          <h2 className="text-base font-semibold">Groq key rotation</h2>
+          {pool && (
+            <span className="rounded-full bg-blue-50 px-2 py-0.5 text-xs font-semibold text-blue-700">
+              {pool.active}/{pool.total} active
+            </span>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <Button variant="ghost" onClick={refresh}>
+            <RefreshCw className={`size-4 ${busy ? "animate-spin" : ""}`} /> Refresh
+          </Button>
+          <Button variant="ghost" disabled={!pool || (pool.cooling === 0 && pool.disabled === 0)}
+            onClick={() => run("action", async () => {
+              await api.resetLlmKeys();
+              refresh();
+              onChanged?.();
+            })}>
+            Reset cooldowns
+          </Button>
+        </div>
+      </div>
+      <p className="mt-0.5 text-sm text-slate-500">
+        Every AI call goes to the next key (round-robin). A rate-limited (429) key rests for the
+        server's <code className="rounded bg-slate-100 px-1">retry-after</code> window while the others keep working; a rejected (401/403)
+        key is disabled until you reset it. Add keys below (provider: groq) or via{" "}
+        <code className="rounded bg-slate-100 px-1">GROQ_API_KEYS=key1,key2</code> in .env.
+      </p>
+      {!pool ? (
+        <p className="mt-3 text-sm text-slate-500">Rotation status unavailable — is the server running?</p>
+      ) : pool.total === 0 ? (
+        <p className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800">
+          No Groq keys configured. Add one below (provider: groq) or set GROQ_API_KEY in .env —
+          several keys rotate automatically and dodge rate limits.
+        </p>
+      ) : (
+        <table className="mt-3 w-full text-sm">
+          <thead>
+            <tr className="border-b border-slate-200 text-left text-xs uppercase tracking-wide text-slate-500">
+              <th className="py-2">Key</th><th className="py-2">Source</th>
+              <th className="py-2">State</th><th className="py-2">Requests</th>
+              <th className="py-2">429s</th><th className="py-2">Last used</th>
+            </tr>
+          </thead>
+          <tbody>
+            {pool.keys.map((k) => {
+              const meta = KEY_STATE_META[k.state] ?? KEY_STATE_META.active;
+              return (
+                <tr key={k.id} className="border-b border-slate-100 last:border-0">
+                  <td className="py-2.5 font-mono text-xs">{k.masked}</td>
+                  <td className="py-2.5 text-slate-600">{k.source}</td>
+                  <td className="py-2.5">
+                    <span title={k.failure_reason}
+                      className={`inline-block rounded-full px-2.5 py-0.5 text-xs font-semibold ${meta.cls}`}>
+                      {meta.label}{k.state === "cooling" && k.cooldown_s_remaining > 0
+                        ? ` ${Math.ceil(k.cooldown_s_remaining)}s` : ""}
+                    </span>
+                  </td>
+                  <td className="py-2.5 text-slate-600">{k.requests}
+                    <span className="text-xs text-emerald-700"> ✓{k.successes}</span></td>
+                  <td className={`py-2.5 ${k.rate_limited > 0 ? "text-amber-700" : "text-slate-600"}`}>
+                    {k.rate_limited}{k.auth_failures > 0 &&
+                      <span className="text-xs text-red-700"> · {k.auth_failures} auth</span>}
+                  </td>
+                  <td className="py-2.5 text-xs text-slate-500">
+                    {k.last_used_at ? k.last_used_at.slice(11, 19) + " UTC" : "never"}
+                  </td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </Card>
+  );
+}
+
 function CredentialsTab() {
   const [items, setItems] = useState<CredentialItem[] | null>(null);
   const [name, setName] = useState("");
@@ -176,6 +273,7 @@ function CredentialsTab() {
 
   return (
     <div className="space-y-4">
+      <KeyRotationCard onChanged={refresh} />
       <Card className="p-5">
         <div className="flex items-center gap-2">
           <ShieldCheck className="size-4 text-emerald-600" />
@@ -184,7 +282,8 @@ function CredentialsTab() {
         <p className="mt-0.5 text-sm text-slate-500">
           Secrets are encrypted with AES-256-GCM before they touch the database. The master key lives
           outside the DB (<code className="rounded bg-slate-100 px-1">data/.credentials.key</code>).
-          Values are never shown again — only masked previews.
+          Values are never shown again — only masked previews. Groq keys added here join the
+          rotation pool immediately — no restart needed.
         </p>
         <form
           className="mt-4 flex flex-wrap items-end gap-3"
