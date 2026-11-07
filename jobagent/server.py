@@ -156,8 +156,10 @@ def health() -> dict:
     Groq or a source is down - this endpoint shows what is degraded, not just up/down."""
     from jobagent.sources import source_health
     from jobagent import groq_keys
+    from jobagent import llm_providers
     llm_backend = cfg("llm.backend", "")
     pool_state = groq_keys.pool_status()
+    fallback_chain = llm_providers.chain()
     sources = source_health()
     degraded = [s for s, v in sources.items()
                 if v.get("last_error") and str(v.get("last_run")) >= db.now()[:10]]
@@ -170,11 +172,13 @@ def health() -> dict:
                 "groq_keys": {"total": pool_state["total"],
                               "active": pool_state["active"],
                               "cooling": pool_state["cooling"],
-                              "disabled": pool_state["disabled"]}},
+                              "disabled": pool_state["disabled"]},
+                "fallbacks": {"configured": len(fallback_chain),
+                              "names": [s.name for s in fallback_chain]}},
         "db": {"jobs": db.stats()["total"], "writable": True},
         "sources": {"tracked": len(sources), "degraded_today": degraded},
         "task_running": bool(tasks.current() and tasks.current().get("running")),
-        "version": "19.1",
+        "version": "20.0",
     }
 
 
@@ -674,10 +678,12 @@ class CredentialUpdateIn(BaseModel):
 
 
 def _reload_key_pool_if_groq(provider: str) -> None:
-    """Vault changes must reach the rotation pool without a restart."""
+    """Vault changes must reach the rotation pools without a restart."""
     if provider == "groq":
         from jobagent import groq_keys
         groq_keys.reload_pool()
+    from jobagent import llm_providers          # Phase 20: fallback pools too
+    llm_providers.reload_providers()
 
 
 @app.get("/api/credentials")
@@ -768,6 +774,23 @@ def llm_keys_reset() -> dict:
     """Operator action: re-read all key sources and re-arm cooling/disabled keys."""
     from jobagent import groq_keys
     return groq_keys.reset_pool()
+
+
+# --------------------------------------------- provider fallback chain (20)
+
+@app.get("/api/llm/providers")
+def llm_providers_status() -> dict:
+    """Phase 20: the configured fallback chain — per-provider key pools
+    (masked), breaker states, models. No secrets, ever."""
+    from jobagent import llm_providers
+    return llm_providers.chain_status()
+
+
+@app.post("/api/llm/providers/reset")
+def llm_providers_reset() -> dict:
+    """Operator action: re-read the chain and re-arm every key in every pool."""
+    from jobagent import llm_providers
+    return llm_providers.reset_providers()
 
 
 # ------------------------------------------------------- state machine (19D)

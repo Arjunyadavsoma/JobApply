@@ -39,6 +39,12 @@ KEY_BYTES = 32
 SUPPORTED_PROVIDERS = {
     "groq": "Groq API",
     "openai": "OpenAI API",
+    "openrouter": "OpenRouter API",
+    "together": "Together AI API",
+    "fireworks": "Fireworks AI API",
+    "gemini": "Google Gemini API (OpenAI-compatible)",
+    "deepseek": "DeepSeek API",
+    "mistral": "Mistral API",
     "anthropic": "Anthropic API",
     "gmail": "Gmail OAuth (client secret or refresh token)",
     "other": "Other service",
@@ -90,12 +96,19 @@ def load_master_key(*, create: bool = True) -> bytes:
         return raw
 
     if KEY_FILE.exists():
-        raw = KEY_FILE.read_bytes().strip()
+        raw = KEY_FILE.read_bytes()
         if len(raw) == KEY_BYTES:
             return raw
-        # A key file with wrong size is a real misconfiguration.
+        # Tolerate a text-editor trailing newline, but NEVER strip the key
+        # itself: it is random binary and may legitimately start or end with
+        # a whitespace byte (b" ", b"\n", ...) — stripping that would turn a
+        # healthy key into a wrong key (Phase 20 flake fix).
+        stripped = raw.strip()
+        if len(stripped) == KEY_BYTES:
+            return stripped
+        # Anything else is a real misconfiguration.
         raise VaultError(
-            f"{KEY_FILE} is corrupt (expected {KEY_BYTES} bytes). "
+            f"{KEY_FILE} is corrupt (expected {KEY_BYTES} bytes, got {len(raw)}). "
             "Restore it from backup or delete it and re-enter credentials.")
 
     if not create:

@@ -3,8 +3,8 @@
 Live progress file for the JobApply platform transformation. Updated at the end of every
 implementation phase. Nothing is marked done that hasn't been tested.
 
-**Last updated:** 2026-11-05 (Phase 19K) · branch `main` · test suite: **451 passed**
-(363 offline + 56 sandbox-E2E; live-adapter tests opt-in; see docs/PHASE_19_TEST_REPORT.md)
+**Last updated:** 2026-11-07 (Phase 20) · branch `main` · test suite: **487 passed**
+(offline; live-adapter tests opt-in; see docs/PHASE_20_REPORT.md)
 
 ---
 
@@ -404,6 +404,37 @@ crash without LLM key, state-machine approval bypass via forged rows.
   rotation fairness, cooldown escalation/caps, disable/reset, bounded waits,
   breaker isolation, endpoint masking, live reload). Suite: 451 passed.
 
+### Phase 20 — LLM provider fallback chain + vault flake fix ✅ (see docs/PHASE_20_REPORT.md)
+
+- `jobagent/llm_providers.py`: ordered fallback chain of OpenAI-compatible providers
+  (presets: openrouter, openai, together, fireworks, gemini, deepseek, mistral,
+  keyless local ollama/lmstudio; custom servers via `llm.fallback_providers` in
+  config.yaml). Configured via `LLM_FALLBACK_PROVIDERS=openrouter,together` in .env.
+- When the groq backend cannot serve (every key cooling/disabled, provider down, or
+  no Groq key at all), `structured()` retries the chain in order; the first success
+  serves the call and `ai_usage.backend` records who (`groq→openrouter`). Daily-budget
+  errors are never fallen back. No chain configured = byte-identical Phase 19K
+  behaviour.
+- Every provider gets its OWN key pool (same rotation semantics: round-robin,
+  429 retry-after cooldown, 401/403 disable, bounded all-cooling wait) and its OWN
+  circuit breaker — checked fail-fast before any key/client work. One provider's
+  outage or bug never affects another; all-exhausted → one honest error naming each
+  provider and its reason.
+- Vault: new providers (openrouter/together/fireworks/gemini/deepseek/mistral) join
+  the credential manager; CRUD hot-reloads every pool.
+- **Fixed a real pre-existing bug:** `load_master_key()` stripped the key file before
+  checking its size — a freshly generated master key has a ~3.9% chance of starting
+  or ending with a whitespace byte, which made the vault declare its own key
+  "corrupt" forever (install-bricking, and the cause of a long-standing ~37% test
+  flake). Now exact-size keys pass untouched; trailing newlines tolerated; wrong
+  sizes rejected with a byte count. Regression-tested.
+- API: `GET /api/llm/providers`, `POST /api/llm/providers/reset`; `/api/health`
+  reports the chain (version 20.0); diagnostics gains `fallback_chain`. Dashboard:
+  "LLM provider fallback chain" card in System → Credential Manager (auto-hidden
+  when unconfigured). Docs: README section + .env.example + config.example.yaml.
+- Tests: `tests/test_llm_providers.py` — 33 offline tests + 3 vault regression tests;
+  suite 487 passed (all 32 Phase 19K tests unchanged and green).
+
 ### Carried limitations
 
 1. **Multi-user isolation** — the product is a single-user, local-first tool (one SQLite
@@ -430,11 +461,12 @@ crash without LLM key, state-machine approval bypass via forged rows.
 
 ```bash
 pip install -r requirements.txt pytest pytest-httpserver
-GROQ_API_KEY=gsk_dummy python -m pytest tests/ -q --ignore=tests/e2e/test_live_adapters.py   # 451 offline tests
+GROQ_API_KEY=gsk_dummy python -m pytest tests/ -q --ignore=tests/e2e/test_live_adapters.py   # 487 offline tests
 GROQ_API_KEY=gsk_dummy python -m pytest tests/e2e/ -m e2e -q   # 56 sandbox browser tests
 GROQ_API_KEY=gsk_real_key python -m pytest scripts/test_groq_backend.py  # real Groq smoke
 cd web && npm ci && npx tsc -p . --noEmit && npm run build
 python -m jobagent init && python -m jobagent web      # dashboard at :8600
 curl http://127.0.0.1:8600/health/live                  # liveness
 curl http://127.0.0.1:8600/api/llm/keys                 # rotation pool status (masked)
+curl http://127.0.0.1:8600/api/llm/providers            # fallback chain status (Phase 20)
 ```

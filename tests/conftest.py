@@ -20,7 +20,8 @@ sys.path.insert(0, str(REPO))
 # no import-time state (pure functions) and are deliberately NOT reloaded —
 # reloading would invalidate direct class imports in their test files.
 RELOADABLE = ("jobagent.db", "jobagent.enrich", "jobagent.profile", "jobagent.prefit",
-              "jobagent.groq_keys", "jobagent.llm", "jobagent.matcher", "jobagent.eligibility",
+              "jobagent.groq_keys", "jobagent.llm_providers", "jobagent.llm",
+              "jobagent.matcher", "jobagent.eligibility",
               "jobagent.analytics", "jobagent.ai_services", "jobagent.tasks", "jobagent.server",
               "jobagent.credentials", "jobagent.backup",
               "jobagent.state_machine", "jobagent.health")

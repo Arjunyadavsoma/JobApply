@@ -134,6 +134,23 @@ llm:
   key_cooldown_seconds: 60        # rest after a 429 without a retry-after header
   key_cooldown_max_seconds: 900   # hard cap for any cooldown
   key_wait_seconds: 30            # max time a call waits when ALL keys are cooling
+  # --- Provider fallback chain (Phase 20) ---
+  # When Groq cannot serve a call (every key cooling/disabled, provider down, or
+  # no Groq key at all), it is retried against these OpenAI-compatible providers
+  # in order. Each gets its OWN key pool (same rotation semantics) and circuit
+  # breaker. Easiest: LLM_FALLBACK_PROVIDERS=openrouter,together in .env (preset
+  # names) — or full custom entries here:
+  # fallback_providers:
+  # - name: openrouter
+  #   model: meta-llama/llama-3.3-70b-instruct      # or set OPENROUTER_MODEL in .env
+  # - name: myvllm                                  # any custom OpenAI-compatible server
+  #   base_url: http://gpu-box:8000/v1
+  #   model: qwen2.5-32b-instruct
+  #   # api_key_envs: [MY_VLLM_KEYS, MY_VLLM_KEY]   # env vars holding its key(s)
+  #   # keyless: true                               # local server without auth
+  # Presets: openrouter, openai, together, fireworks, gemini, deepseek, mistral,
+  # ollama (http://localhost:11434/v1), lmstudio (http://localhost:1234/v1).
+  # Status: System -> Credential Manager, or GET /api/llm/providers.
   # claude_cli: "C:/path/to/claude.exe"   # subscription backend only; auto-detected
   # Effort per task (Claude levels; on Groq gpt-oss these map to reasoning_effort low/medium/high)
   score_effort: low

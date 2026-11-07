@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   Activity, DatabaseBackup, HardDrive, KeyRound, Plus, RefreshCw, RotateCw,
-  ShieldCheck, Table2,
+  ShieldCheck, Table2, Workflow,
 } from "lucide-react";
 import {
   api, type AtsMatrixRow, type BackupInfo, type CredentialItem, type Diagnostics,
-  type GroqKeyPoolStatus, type GroqKeyStatus, type SystemStatus,
+  type GroqKeyPoolStatus, type GroqKeyStatus, type LLMProviderChainStatus,
+  type SystemStatus,
 } from "../api";
 import { Button, Card, useAction } from "./ui";
 
@@ -160,7 +161,8 @@ function AtsMatrixTab() {
   );
 }
 
-const PROVIDERS = ["groq", "openai", "anthropic", "gmail", "other"];
+const PROVIDERS = ["groq", "openai", "openrouter", "together", "fireworks", "gemini",
+  "deepseek", "mistral", "anthropic", "gmail", "other"];
 
 const KEY_STATE_META: Record<GroqKeyStatus["state"], { label: string; cls: string }> = {
   active: { label: "Active", cls: "bg-emerald-100 text-emerald-800" },
@@ -258,6 +260,110 @@ function KeyRotationCard({ onChanged }: { onChanged?: () => void }) {
   );
 }
 
+function ProviderChainCard({ onChanged }: { onChanged?: () => void }) {
+  const [chain, setChain] = useState<LLMProviderChainStatus | null>(null);
+  const { run, busy } = useAction();
+
+  const refresh = useCallback(() => {
+    api.llmProviders().then(setChain).catch(() => setChain(null));
+  }, []);
+  useEffect(refresh, [refresh]);
+
+  if (chain && chain.configured === 0) return null;   // no fallbacks: stay invisible
+
+  return (
+    <Card className="p-5">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <Workflow className="size-4 text-violet-600" />
+          <h2 className="text-base font-semibold">LLM provider fallback chain</h2>
+          {chain && (
+            <span className="rounded-full bg-violet-50 px-2 py-0.5 text-xs font-semibold text-violet-700">
+              {chain.configured} provider{chain.configured === 1 ? "" : "s"}
+            </span>
+          )}
+        </div>
+        <div className="flex gap-2">
+          <Button variant="ghost" onClick={refresh}>
+            <RefreshCw className={`size-4 ${busy ? "animate-spin" : ""}`} /> Refresh
+          </Button>
+          <Button variant="ghost" onClick={() => run("action", async () => {
+            await api.resetLlmProviders();
+            refresh();
+            onChanged?.();
+          })}>
+            <RotateCw className="size-4" /> Re-arm all keys
+          </Button>
+        </div>
+      </div>
+      <p className="mt-0.5 text-sm text-slate-500">
+        When Groq can&rsquo;t serve a call (every key cooling or disabled, provider down, or no
+        Groq key), it is retried against these providers in order — each with its own key
+        rotation and circuit breaker. Configure via{" "}
+        <code className="rounded bg-slate-100 px-1">LLM_FALLBACK_PROVIDERS=openrouter,together</code>{" "}
+        in .env or <code className="rounded bg-slate-100 px-1">llm.fallback_providers</code> in
+        config.yaml.
+      </p>
+      {!chain ? (
+        <p className="mt-3 text-sm text-slate-500">Chain status unavailable — is the server running?</p>
+      ) : (
+        <div className="mt-3 space-y-4">
+          {chain.providers.map((p) => {
+            const breakerOpen = p.breaker?.state === "open";
+            return (
+              <div key={p.name} className="rounded-lg border border-slate-200 p-3">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-mono text-sm font-semibold">{p.name}</span>
+                  <span className="rounded bg-slate-100 px-1.5 py-0.5 font-mono text-xs text-slate-600">
+                    {p.model || "no model set"}
+                  </span>
+                  {p.keyless && (
+                    <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-semibold text-slate-600">
+                      local · no key
+                    </span>
+                  )}
+                  <span className={`rounded-full px-2 py-0.5 text-xs font-semibold ${
+                    p.active > 0 ? "bg-emerald-100 text-emerald-800"
+                      : p.disabled > 0 ? "bg-red-100 text-red-800" : "bg-amber-100 text-amber-800"}`}>
+                    {p.active}/{p.total} keys active
+                  </span>
+                  {breakerOpen && (
+                    <span className="rounded-full bg-red-100 px-2 py-0.5 text-xs font-semibold text-red-800"
+                      title="Circuit open after repeated failures — calls fail fast during a cooldown">
+                      circuit open
+                    </span>
+                  )}
+                  {p.docs_url && (
+                    <a href={p.docs_url} target="_blank" rel="noreferrer"
+                      className="text-xs text-blue-600 hover:underline">get a key ↗</a>
+                  )}
+                </div>
+                <p className="mt-1 font-mono text-xs text-slate-400">{p.base_url}</p>
+                {p.keys.length > 0 && (
+                  <div className="mt-2 flex flex-wrap gap-1.5">
+                    {p.keys.map((k) => {
+                      const meta = KEY_STATE_META[k.state] ?? KEY_STATE_META.active;
+                      return (
+                        <span key={k.id} title={`${k.source} · ${k.failure_reason || "healthy"}`}
+                          className={`rounded-full px-2 py-0.5 text-xs font-medium ${meta.cls}`}>
+                          <span className="font-mono">{k.masked}</span>
+                          {k.state === "cooling" && k.cooldown_s_remaining > 0
+                            ? ` · ${Math.ceil(k.cooldown_s_remaining)}s` : ""}
+                          {k.auth_failures > 0 ? ` · ${k.auth_failures} auth` : ""}
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 function CredentialsTab() {
   const [items, setItems] = useState<CredentialItem[] | null>(null);
   const [name, setName] = useState("");
@@ -274,6 +380,7 @@ function CredentialsTab() {
   return (
     <div className="space-y-4">
       <KeyRotationCard onChanged={refresh} />
+      <ProviderChainCard onChanged={refresh} />
       <Card className="p-5">
         <div className="flex items-center gap-2">
           <ShieldCheck className="size-4 text-emerald-600" />

@@ -222,6 +222,7 @@ def diagnostics() -> dict[str, Any]:
         "schema_version": check_schema_version(),
         "db_integrity": check_db_integrity(),
         "groq": check_groq(),
+        "fallback_chain": check_fallback_chain(),
         "browser": check_browser(),
         "storage": check_storage(),
         "background_workers": check_background_workers(),
@@ -234,4 +235,29 @@ def diagnostics() -> dict[str, Any]:
         "uptime_s": uptime_seconds(),
         "checks": checks,
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+    }
+
+
+def check_fallback_chain() -> dict[str, Any]:
+    """Phase 20: report the configured provider fallback chain (never fails
+    the overall diagnostics — an empty chain is a valid configuration)."""
+    from jobagent import llm_providers
+
+    try:
+        status = llm_providers.chain_status()
+    except Exception as exc:  # noqa: BLE001 — diagnostics must never crash
+        return {"ok": False, "detail": f"chain status failed: {type(exc).__name__}"}
+    return {
+        "ok": True,
+        "configured": status["configured"],
+        "providers": [
+            {"name": p["name"], "model": p["model"], "base_url": p["base_url"],
+             "keys_total": p["total"], "keys_active": p["active"],
+             "keys_cooling": p["cooling"], "keys_disabled": p["disabled"],
+             "breaker": p["breaker"]}
+            for p in status["providers"]
+        ],
+        "detail": (f"{status['configured']} fallback provider(s) configured"
+                   if status["configured"]
+                   else "no fallback providers configured (optional)"),
     }

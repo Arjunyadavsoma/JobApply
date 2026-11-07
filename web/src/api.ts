@@ -318,6 +318,10 @@ export const api = {
   llmKeys: () => request<GroqKeyPoolStatus>("/api/llm/keys"),
   resetLlmKeys: () =>
     post<{ ok: boolean; keys: number; status: GroqKeyPoolStatus }>("/api/llm/keys/reset"),
+  llmProviders: () => request<LLMProviderChainStatus>("/api/llm/providers"),
+  resetLlmProviders: () =>
+    post<{ ok: boolean; providers: number; keys: number; status: LLMProviderChainStatus }>(
+      "/api/llm/providers/reset"),
   backups: () => request<{ ok: boolean; backups: BackupInfo[]; count: number }>("/api/backup"),
   createBackup: (label = "") => post<BackupInfo & { ok: boolean }>(`/api/backup?label=${encodeURIComponent(label)}`),
   restoreBackup: (name: string) =>
@@ -386,6 +390,22 @@ export interface GroqKeyPoolStatus {
   cooling: number;
   disabled: number;
   keys: GroqKeyStatus[];
+}
+
+// ---- Phase 20: LLM provider fallback chain ----
+
+export interface LLMProviderStatus extends GroqKeyPoolStatus {
+  name: string;
+  base_url: string;
+  model: string;
+  keyless: boolean;
+  docs_url: string;
+  breaker: { state: string; failures: number };
+}
+
+export interface LLMProviderChainStatus {
+  configured: number;
+  providers: LLMProviderStatus[];
 }
 
 export interface AtsMatrixRow {

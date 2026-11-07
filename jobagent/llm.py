@@ -24,6 +24,13 @@ Production hardening (all backends):
   an operator resets. Per-key errors never trip the provider circuit.
   Configure via GROQ_API_KEYS (comma-separated) in .env or store extra
   "groq" credentials in System -> Credential Manager.
+- provider fallback chain (Phase 20): when the groq backend cannot serve
+  (every key cooling/disabled, provider down, or no Groq key at all), the
+  call is retried against the configured OpenAI-compatible fallback
+  providers (LLM_FALLBACK_PROVIDERS=openrouter,together in .env or
+  llm.fallback_providers in config.yaml) — each with its own key pool and
+  circuit breaker. No fallbacks configured = unchanged Phase 19K behaviour.
+  Who actually served a call is recorded in ai_usage ("groq→openrouter").
 """
 from __future__ import annotations
 
@@ -37,6 +44,7 @@ import subprocess
 import tempfile
 import threading
 import time
+from dataclasses import dataclass
 from functools import lru_cache
 from pathlib import Path
 from typing import TypeVar
@@ -183,17 +191,24 @@ def structured(
                 pass
             return hit
     started = time.monotonic()
+    backend_used = backend
     try:
         if backend == "api":
             result = _via_api(schema, system, content, effort, max_tokens, pdfs or [])
         elif backend == "groq":
-            result = _via_groq(schema, system, content, effort, max_tokens, pdfs or [])
+            try:
+                result = _via_groq(schema, system, content, effort, max_tokens, pdfs or [])
+            except LLMError as primary_error:
+                # Phase 20: the primary provider could not serve — walk the
+                # configured fallback chain (no chain -> the original error).
+                result, backend_used = _via_fallback_chain(
+                    schema, system, content, effort, max_tokens, pdfs or [], primary_error)
         else:
             result = _via_claude_code(schema, system, content, effort, pdfs or [])
     except LLMError:
-        _track(task, backend, started, ok=False)
+        _track(task, backend_used, started, ok=False)
         raise
-    _track(task, backend, started, ok=True)
+    _track(task, backend_used, started, ok=True)
     if cache:
         _cache_put(key, result)
     return result
@@ -490,37 +505,45 @@ def _groq_create(kwargs: dict, client=None):
         return response, data
 
 
-def _via_groq(schema: type[T], system: str, content: str, effort: str, max_tokens: int,
-              pdfs: list[Path]) -> T:
-    """Groq call with key rotation (Phase 19K).
+@dataclass(frozen=True)
+class _PoolHints:
+    """Per-provider wording for the shared rotation loop (Phase 20).
+
+    ``label`` keeps every existing Groq error message byte-identical when the
+    primary provider calls this code path.
+    """
+    label: str            # "Groq" / "OpenRouter" / …
+    model_hint: str       # how to fix a model-not-found error
+    add_keys_hint: str    # tail of the every-key-rate-limited error
+
+
+def _call_openai_pool(*, schema: type[T], key_pool, provider: str, hints: _PoolHints,
+                      model: str, fallback_model: str | None, client_factory,
+                      messages: list[dict], kwargs: dict) -> T:
+    """The Phase 19K rotation loop, provider-agnostic (Phase 20).
 
     Each round picks the next available key from the pool. A 429 rests that
     key (cooldown from the retry-after header) and rotates to the next one;
     a 401/403 disables the key and rotates. Provider-level problems
-    (network, 5xx) retry with backoff behind the circuit breaker. When every
-    key is cooling the call waits (bounded by llm.key_wait_seconds) for the
-    soonest key instead of failing instantly.
+    (network, 5xx) retry with backoff behind that provider's circuit breaker.
+    When every key is cooling the call waits (bounded by llm.key_wait_seconds)
+    for the soonest key instead of failing instantly.
+
+    ``provider`` names the circuit breaker (one per provider — one provider's
+    outage never affects another). ``client_factory(key)`` returns the cached
+    per-key OpenAI client.
     """
     import openai
     from jobagent import groq_keys
-    from jobagent.llm_resilience import CircuitOpenError, call_with_resilience
+    from jobagent.llm_resilience import (CircuitOpenError, breaker_for,
+                                         call_with_resilience)
 
-    if pdfs:
-        content += "\n\nAttached documents (plain text extracted from the PDFs):\n" + \
-            "\n\n".join(f"<{p.stem}>\n{_pdf_text(p)}\n</{p.stem}>" for p in pdfs)
-    messages = [{"role": "system", "content": system}, {"role": "user", "content": content}]
-    model = _groq_model_name()
-    kwargs: dict = {"model": model, "messages": messages, "max_completion_tokens": max_tokens}
-    reasoning = _groq_reasoning_effort(model, effort)
-    if reasoning:
-        kwargs["reasoning_effort"] = reasoning
-
-    key_pool = groq_keys.pool()
-    if len(key_pool) == 0:
-        raise LLMError(
-            "No Groq API key configured - add GROQ_API_KEY (or several, comma-separated, "
-            "in GROQ_API_KEYS) to .env - get free keys at https://console.groq.com/keys - "
-            "or store extra keys in System -> Credential Manager (provider: groq).")
+    # Fail fast on an open circuit — before acquiring a key or building a
+    # client, so an outage costs nothing.
+    try:
+        breaker_for(provider).check()
+    except CircuitOpenError as e:
+        raise LLMError(str(e)) from e
 
     # Key-level errors rotate (pass_through: never recorded on the provider
     # breaker — a healthy key pool must not look like a down provider).
@@ -537,14 +560,14 @@ def _via_groq(schema: type[T], system: str, content: str, effort: str, max_token
                 timeout=float(cfg("llm.key_wait_seconds", 30)))
             if key is None:
                 break
-        client = _client_for(key)
+        client = client_factory(key)
 
         def _call():
             return _groq_create({**kwargs, "_schema": schema}, client=client)
 
         try:
             response, data = call_with_resilience(
-                "groq", _call,
+                provider, _call,
                 attempts=int(cfg("llm.retry_attempts", 3)) + 1,
                 base_delay=float(cfg("llm.retry_base_delay", 0.5)),
                 max_delay=float(cfg("llm.retry_max_delay", 8.0)),
@@ -565,33 +588,33 @@ def _via_groq(schema: type[T], system: str, content: str, effort: str, max_token
         except CircuitOpenError as e:
             raise LLMError(str(e)) from e
         except openai.NotFoundError as e:
-            raise LLMError("Groq model not found - check llm.model / GROQ_MODEL.") from e
+            raise LLMError(f"{hints.label} model not found - {hints.model_hint}.") from e
         except openai.APIConnectionError as e:
-            raise LLMError("Could not reach the Groq API (network problem).") from e
+            raise LLMError(f"Could not reach the {hints.label} API (network problem).") from e
         except openai.APIStatusError as e:
-            raise LLMError(f"Groq API error {e.status_code}: {e.message}") from e
+            raise LLMError(f"{hints.label} API error {e.status_code}: {e.message}") from e
         except (json.JSONDecodeError, ValidationError) as e:
-            fb = _groq_fallback_model()
+            fb = fallback_model
             if not fb or fb == model:
-                raise LLMError(f"Groq's output wasn't valid JSON for {schema.__name__}: {str(e)[:300]}") from e
+                raise LLMError(f"{hints.label}'s output wasn't valid JSON for {schema.__name__}: {str(e)[:300]}") from e
             # One retry on the fallback model, same key.
             response, data = _groq_create({"model": fb,
                                            **{k: v for k, v in kwargs.items() if k != "model"},
                                            "_schema": schema}, client=client)
         except openai.BadRequestError as e:
             msg = str(e)
-            fb = _groq_fallback_model()
+            fb = fallback_model
             if fb and fb != model and ("model" in msg.lower() or "context" in msg.lower()
                                        or "token" in msg.lower()):
                 response, data = _groq_create({"model": fb,
                                                **{k: v for k, v in kwargs.items() if k != "model"},
                                                "_schema": schema}, client=client)
             else:
-                raise LLMError(f"Groq rejected the request: {msg[:300]}") from e
+                raise LLMError(f"{hints.label} rejected the request: {msg[:300]}") from e
 
         key_pool.report_success(key)
         if not data and (response.choices[0].message.content or "").strip():
-            raise LLMError(f"Groq returned an empty answer for {schema.__name__}.")
+            raise LLMError(f"{hints.label} returned an empty answer for {schema.__name__}.")
         if response.choices[0].finish_reason == "length":
             raise LLMError("The model's answer was cut off (max_tokens); try a lower effort setting.")
         try:
@@ -606,12 +629,124 @@ def _via_groq(schema: type[T], system: str, content: str, effort: str, max_token
     st = key_pool.status()
     if st["active"] == 0 and st["cooling"] == 0 and st["disabled"] > 0:
         raise LLMError(
-            f"All {st['total']} Groq keys were rejected by the API (auth failures). "
+            f"All {st['total']} {hints.label} keys were rejected by the API (auth failures). "
             "Fix or remove the bad keys (System -> Credential Manager / .env), then use "
             "'Reset key rotation' there to re-arm them.")
     wait_s = key_pool.next_cooldown_remaining()
     raise LLMError(
-        f"Every Groq key is rate-limited right now ({st['cooling']} cooling, "
+        f"Every {hints.label} key is rate-limited right now ({st['cooling']} cooling, "
         f"{st['disabled']} disabled, {st['active']} active; next key free in ~{wait_s:.0f}s). "
-        "Add more keys to spread the load - GROQ_API_KEYS=key1,key2 in .env or extra "
-        "'groq' credentials in System -> Credential Manager.")
+        f"{hints.add_keys_hint}")
+
+
+def _via_groq(schema: type[T], system: str, content: str, effort: str, max_tokens: int,
+              pdfs: list[Path]) -> T:
+    """Groq call with key rotation (Phase 19K). Thin wrapper over the shared
+    rotation loop — messages stay byte-identical to Phase 19K."""
+    from jobagent import groq_keys
+
+    if pdfs:
+        content += "\n\nAttached documents (plain text extracted from the PDFs):\n" + \
+            "\n\n".join(f"<{p.stem}>\n{_pdf_text(p)}\n</{p.stem}>" for p in pdfs)
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": content}]
+    model = _groq_model_name()
+    kwargs: dict = {"model": model, "messages": messages, "max_completion_tokens": max_tokens}
+    reasoning = _groq_reasoning_effort(model, effort)
+    if reasoning:
+        kwargs["reasoning_effort"] = reasoning
+
+    key_pool = groq_keys.pool()
+    if len(key_pool) == 0:
+        raise LLMError(
+            "No Groq API key configured - add GROQ_API_KEY (or several, comma-separated, "
+            "in GROQ_API_KEYS) to .env - get free keys at https://console.groq.com/keys - "
+            "or store extra keys in System -> Credential Manager (provider: groq).")
+
+    return _call_openai_pool(
+        schema=schema, key_pool=key_pool, provider="groq",
+        hints=_PoolHints(
+            label="Groq",
+            model_hint="check llm.model / GROQ_MODEL",
+            add_keys_hint="Add more keys to spread the load - GROQ_API_KEYS=key1,key2 in .env "
+                          "or extra 'groq' credentials in System -> Credential Manager."),
+        model=model, fallback_model=_groq_fallback_model(),
+        client_factory=_client_for, messages=messages, kwargs=kwargs)
+
+
+def _via_fallback_provider(spec, schema: type[T], system: str, content: str, effort: str,
+                           max_tokens: int, pdfs: list[Path]) -> T:
+    """One fallback provider attempt (Phase 20): same rotation semantics on a
+    different OpenAI-compatible endpoint. Uses the universal ``max_tokens``
+    parameter (not every endpoint understands Groq's ``max_completion_tokens``)
+    and sends no reasoning-effort flag (unknown params are rejected by some
+    servers)."""
+    from jobagent import llm_providers
+
+    if pdfs:
+        content += "\n\nAttached documents (plain text extracted from the PDFs):\n" + \
+            "\n\n".join(f"<{p.stem}>\n{_pdf_text(p)}\n</{p.stem}>" for p in pdfs)
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": content}]
+    try:
+        model = llm_providers.model_for(spec)
+    except ValueError as e:
+        raise LLMError(str(e)) from e
+    kwargs: dict = {"model": model, "messages": messages, "max_tokens": max_tokens}
+
+    env_hint = spec.env_single or (spec.env_multi or f"{spec.name.upper()}_API_KEY")
+    key_pool = llm_providers.pool_for(spec)
+    if len(key_pool) == 0:
+        raise LLMError(
+            f"No {spec.name} API key configured for the fallback provider - add "
+            f"{env_hint} to .env or store a '{spec.vault_provider or spec.name}' credential "
+            "in System -> Credential Manager.")
+
+    return _call_openai_pool(
+        schema=schema, key_pool=key_pool, provider=spec.name,
+        hints=_PoolHints(
+            label=spec.name.capitalize(),
+            model_hint=f"check its model setting ({spec.env_model_var()} or "
+                       "llm.fallback_providers in config.yaml)",
+            add_keys_hint=f"Add more {spec.name} keys ({env_hint} in .env or extra "
+                          f"'{spec.vault_provider or spec.name}' credentials in "
+                          "System -> Credential Manager)."),
+        model=model, fallback_model=spec.fallback_model,
+        client_factory=lambda key: llm_providers.client_for(spec, key),
+        messages=messages, kwargs=kwargs)
+
+
+def _via_fallback_chain(schema: type[T], system: str, content: str, effort: str,
+                        max_tokens: int, pdfs: list[Path],
+                        primary_error: "LLMError") -> tuple[T, str]:
+    """Phase 20: the primary (groq) could not serve — walk the configured
+    fallback providers in order until one succeeds.
+
+    Returns ``(result, backend_label)`` where the label records who actually
+    served the call (e.g. ``groq→openrouter``) for the ai_usage audit trail.
+    No fallbacks configured → the original error propagates unchanged.
+    """
+    from jobagent import llm_providers
+
+    chain = llm_providers.chain()
+    if not chain:
+        raise primary_error
+
+    failures = [f"groq: {primary_error}"]
+    for spec in chain:
+        try:
+            result = _via_fallback_provider(spec, schema, system, content, effort,
+                                            max_tokens, pdfs)
+            log.info("LLM call served by fallback provider %s (primary unavailable: %s)",
+                     spec.name, str(primary_error)[:160])
+            return result, f"groq->{spec.name}"
+        except LLMError as e:
+            failures.append(f"{spec.name}: {e}")
+            continue
+        except Exception as e:  # noqa: BLE001 — one provider's bug must not kill the chain
+            failures.append(f"{spec.name}: unexpected error: {type(e).__name__}: {e}")
+            log.warning("fallback provider %s raised %s", spec.name,
+                        type(e).__name__, exc_info=True)
+            continue
+
+    raise LLMError(
+        "All LLM providers failed. " + " | ".join(failures) +
+        " - check /api/llm/providers or System -> Credential Manager.")

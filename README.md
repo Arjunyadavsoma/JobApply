@@ -178,6 +178,37 @@ GROQ_API_KEYS=gsk_key_one,gsk_key_two,gsk_key_three
   **Reset cooldowns** button: **System → Credential Manager → Groq key rotation**.
   The API exposes the same at `GET /api/llm/keys` and `POST /api/llm/keys/reset`.
 
+### Provider fallback chain — never lose the AI to one provider (Phase 20)
+
+Rotation spreads load across keys, but if *all* Groq keys are exhausted or Groq itself is
+down, the call can still fail. Configure a fallback chain and the same call is retried
+against your other OpenAI-compatible providers, in order:
+
+```bash
+# .env
+LLM_FALLBACK_PROVIDERS=openrouter,together
+OPENROUTER_API_KEYS=sk-or-key-one,sk-or-key-two     # multi-key rotation per provider
+TOGETHER_API_KEY=...
+```
+
+- **How it walks:** Groq first (full rotation), then each fallback provider in the order
+  you list them. The first one that succeeds serves the call; `ai_usage` records who
+  actually served it (`groq→openrouter`), so analytics stay honest.
+- **Same rotation semantics everywhere:** every provider gets its own key pool
+  (round-robin, 429 cooldown from `retry-after`, 401/403 disable) and its own circuit
+  breaker — one provider's outage never affects another.
+- **Presets:** `openrouter`, `openai`, `together`, `fireworks`, `gemini`, `deepseek`,
+  `mistral`, plus local `ollama` / `lmstudio` (keyless). Per-provider model override:
+  `<NAME>_MODEL` in .env. Custom servers (vLLM etc.) via `llm.fallback_providers` in
+  `config.yaml`.
+- **Keys:** `<NAME>_API_KEYS` (multi) + `<NAME>_API_KEY` (single) in .env, plus vault
+  credentials with the matching provider name (System → Credential Manager now accepts
+  all preset providers). Changes apply live, no restart.
+- No fallbacks configured → behaviour is exactly as before.
+- Status: **System → Credential Manager → LLM provider fallback chain**, or
+  `GET /api/llm/providers` / `POST /api/llm/providers/reset`; `/api/health` reports the
+  chain, diagnostics includes per-provider breakers.
+
 ## Using it
 
 1. **Jobs → Search.** Optionally score the new jobs right away (~5-10 s per job on Groq).

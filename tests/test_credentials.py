@@ -47,6 +47,40 @@ class TestMasterKey:
         mode = key_file.stat().st_mode & 0o777
         assert mode == 0o600
 
+    def test_random_key_with_whitespace_bytes_survives_roundtrip(self, monkeypatch, vault_env):
+        """Phase 20 flake fix: a generated master key is random BINARY — it may
+        legitimately start or end with a whitespace byte. The vault must never
+        call its own healthy key 'corrupt' (this was a ~4% install-bricking bug)."""
+        vault, _ = vault_env
+        tricky = b"\n" + b"\x01\x02\x03" * 10 + b" "     # 32 bytes, whitespace at both ends
+        assert len(tricky) == 32
+        # Size-aware mock: the 32-byte master-key draw returns `tricky`, but
+        # the 12-byte GCM nonces inside _encrypt keep using real randomness.
+        real_token_bytes = vault.secrets.token_bytes
+        monkeypatch.setattr(vault.secrets, "token_bytes",
+                            lambda n: tricky if n == 32 else real_token_bytes(n))
+        key = vault.load_master_key(create=True)             # writes the file
+        assert key == tricky
+        assert vault.load_master_key(create=False) == tricky  # reads back intact
+
+        vault.add_credential("groq-main", "groq", "gsk_testvalue1234567890")
+        assert vault.get_secret("groq-main") == "gsk_testvalue1234567890"
+
+    def test_key_file_with_trailing_newline_tolerated(self, vault_env):
+        """A hand-edited key file with a trailing newline still works."""
+        vault, key_file = vault_env
+        key = b"\x07" * 32
+        key_file.parent.mkdir(parents=True, exist_ok=True)
+        key_file.write_bytes(key + b"\n")
+        assert vault.load_master_key(create=False) == key
+
+    def test_key_file_wrong_size_still_rejected(self, vault_env):
+        vault, key_file = vault_env
+        key_file.parent.mkdir(parents=True, exist_ok=True)
+        key_file.write_bytes(b"\x07" * 31)                   # too short, no whitespace
+        with pytest.raises(vault.VaultError, match="corrupt"):
+            vault.load_master_key(create=False)
+
     def test_corrupt_key_file_fails_loudly(self, vault_env):
         vault, key_file = vault_env
         key_file.parent.mkdir(parents=True, exist_ok=True)
